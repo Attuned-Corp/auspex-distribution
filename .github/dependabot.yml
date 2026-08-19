@@ -1,0 +1,15 @@
+# Dependabot keeps our SHA-pinned GitHub Actions current: the workflows pin each action to a full commit
+# SHA (supply-chain safety — a moved tag can't silently change what runs), and Dependabot bumps both the
+# SHA and its trailing "# vX.Y.Z" comment as new releases ship, so the pins don't rot into stale,
+# unpatched versions. This repo has no Go modules (the auspex binary lives in the private auspex repo), so
+# only the github-actions ecosystem is tracked here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # One PR for all action bumps — these are low-risk, high-frequency, and reviewed together.
+      github-actions:
+        patterns: ["*"]
