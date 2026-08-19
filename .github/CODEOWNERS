@@ -1,0 +1,17 @@
+# This repo is the TOP of the customer trust chain: src/span-auspex/install.sh runs the
+# cosign verification of the downloaded binary at container build, and
+# .github/workflows/publish-feature.yml mints the keyless signing identity customers pin
+# against. Both are load-bearing, so every change requires maintainer review.
+#
+# NOTE: CODEOWNERS only *enforces* when paired with a `main` ruleset (or branch protection)
+# that requires code-owner review AND the team below has write access to this repo. Because
+# this repo is PUBLIC, code-owner-required review is available on the GitHub Team plan (unlike
+# the private auspex repo).
+
+*                                       @Attuned-Corp/auspex-maintainers
+
+# Trust-critical hotspots (already covered by the catch-all; listed for intent + future splits).
+/src/span-auspex/install.sh             @Attuned-Corp/auspex-maintainers
+/src/span-auspex/trusted_root.json      @Attuned-Corp/auspex-maintainers
+/src/span-auspex/devcontainer-feature.json @Attuned-Corp/auspex-maintainers
+/.github/workflows/                      @Attuned-Corp/auspex-maintainers

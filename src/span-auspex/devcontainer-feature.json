@@ -1,0 +1,63 @@
+{
+  "id": "span-auspex",
+  "version": "0.3.0",
+  "name": "Span Auspex Capture",
+  "documentationURL": "https://github.com/Attuned-Corp/auspex-devcontainer-features",
+  "description": "Installs the auspex capture agent and runs it under the auspex-owned supervisor (no OS service manager), the posture for ephemeral dev containers and cloud agents. onCreate does a service-free, idempotent cold install (wires detected coding tools + arms the cold-start capture relax); postStart (re)launches `auspex daemon --supervise` so the worker is respawned and drained on the orchestrator's resume/stop.",
+  "options": {
+    "binaryUri": {
+      "type": "string",
+      "default": "",
+      "description": "Where to obtain the auspex binary. An http(s):// URL is downloaded; any other value is treated as a path already present in the container and copied. Empty fails the install with guidance — distribution is intentionally pluggable and has no default source yet."
+    },
+    "version": {
+      "type": "string",
+      "default": "",
+      "description": "Release tag substituted for the literal {{version}} token in binaryUri (e.g. v0.1.0) and recorded alongside the placed binary. Empty is fine for a non-templated binaryUri; a {{version}} template with no version fails the install (there is no mutable 'latest' alias on the download host)."
+    },
+    "verify": {
+      "type": "string",
+      "enum": ["checksum", "cosign", "none"],
+      "default": "cosign",
+      "description": "Integrity/provenance check for a downloaded (https) binaryUri. 'cosign' (default) keyless-verifies the version-root checksums.txt against auspex's pinned release identity and confirms the binary's digest is in it — proving authenticity, not just integrity. It needs NO pre-installed cosign (the Feature auto-provisions a pinned cosign) and makes NO Sigstore network calls (a pinned trusted_root.json is shipped); it does need egress to github.com for cosign and downloads a ~150 MB binary once per build. 'checksum' fetches the adjacent <binaryUri>.sha256 and fails on a SHA-256 mismatch or missing sidecar (integrity only). 'none' installs without verification (not recommended for a remote source). Ignored for an in-container path binaryUri (locally-present, already trusted)."
+    },
+    "auspexHome": {
+      "type": "string",
+      "default": "",
+      "description": "AUSPEX_HOME for the binary, config, and runspace. Empty uses the daemon default (~/.auspex). Named auspexHome (not home) to avoid clobbering $HOME in the install environment."
+    },
+    "tokenFile": {
+      "type": "string",
+      "default": "",
+      "description": "Path to a file (mounted by the platform's file-secret mechanism) holding the org Span token. This is the PATH, not the token. More secure than the AUSPEX_CLOUD_TOKEN env var: onCreate reads it once via `install --token-file` into the 0600 identity file, so the secret never lives in the process environment (where any child can read /proc/<pid>/environ). Empty ⇒ enroll via AUSPEX_CLOUD_TOKEN env instead, or stay local-only."
+    },
+    "deviceId": {
+      "type": "string",
+      "default": "",
+      "description": "Pins AUSPEX_DEVICE_ID. Leave EMPTY in almost all cases: the daemon then generates a per-container UUID, so each container is a distinct device. Do NOT hard-code a literal shared across a team/template — every container built from it collapses into one device in Span. Only set it (ideally via a ${localEnv:...}/${containerEnv:...} expansion that is unique per user+workspace) when you need one logical device to stay stable across rebuilds. See the README's device-identity note."
+    },
+    "hookScope": {
+      "type": "string",
+      "enum": ["user", "system"],
+      "default": "user",
+      "description": "Where capture hooks are placed. 'user' (default) wires them into the container user's tool configs at onCreate (`auspex hooks install`, folded into the onCreate install). 'system' places them at the machine-wide /etc tier at BUILD time as root (`auspex hooks install --system`), giving clobber-isolation from other features and firing under Claude's allowManagedHooksOnly lockdown; onCreate then defers the machine-wide wiring (it is already at /etc) and only enrolls + arms capture. System scope needs a root feature-install phase (the default); on a rootless builder it fails soft with guidance and you can fall back to 'user'. VS Code is user-scoped either way and is registered declaratively via this feature's VS Code settings (below), since the container VS Code Server reads its machine-settings, not a path a command writes."
+    }
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils"
+  ],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "chat.useHooks": true,
+        "chat.hookFilesLocations": {
+          "~/.auspex/vscode/hooks.json": true,
+          "~/.claude/settings.json": false,
+          "~/.copilot/hooks": false
+        }
+      }
+    }
+  },
+  "onCreateCommand": "/usr/local/share/auspex/lifecycle.sh install",
+  "postStartCommand": "/usr/local/share/auspex/lifecycle.sh supervise"
+}
