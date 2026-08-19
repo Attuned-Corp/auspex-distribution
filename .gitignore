@@ -1,0 +1,8 @@
+# Build / test staging
+/bin/
+/staging/
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*~

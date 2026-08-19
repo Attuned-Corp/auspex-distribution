@@ -1,0 +1,28 @@
+// Customer-facing starting point for the Span Auspex Capture Dev Container Feature.
+// Copy the `features` (and `containerEnv`) blocks into your own .devcontainer/devcontainer.json.
+// See ../README.md for the full option reference, enrollment, hook placement, and verification.
+{
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    // Published Feature (ghcr). Pin to the major (:0) for non-breaking updates, a full :0.3.0 to freeze
+    // the version, or — strongest — an immutable @sha256:… digest verified once with cosign (README →
+    // "Signature + digest pinning").
+    "ghcr.io/attuned-corp/auspex-devcontainer-features/span-auspex:0": {
+      // Replace <your-auspex-download-host> with the download host provided to you at onboarding (must be
+      // https). {{version}} is substituted from `version`; use arm64 for an arm container. `verify` defaults
+      // to "cosign" — keyless-verifies the signed checksums.txt (auto-provisions cosign; no Sigstore
+      // network; needs github.com egress).
+      "binaryUri": "https://<your-auspex-download-host>/releases/{{version}}/linux/amd64/auspex",
+      "version": "v0.1.0",
+      // "verify": "checksum",  // lighter: SHA-256 sidecar only — integrity, no egress beyond the download host
+      "hookScope": "user"
+    }
+  },
+  // Enrollment is env-driven and read by the supervised daemon at start (see README → "Enrolling with
+  // Span"). On Codespaces / most CDEs an org secret AUSPEX_CLOUD_TOKEN already arrives as an env var, so
+  // this block is only needed to forward from a LOCAL shell. Work email is PER-USER — never a shared literal.
+  "containerEnv": {
+    "AUSPEX_CLOUD_TOKEN": "${localEnv:AUSPEX_CLOUD_TOKEN}",
+    "AUSPEX_CLOUD_WORK_EMAIL": "${localEnv:AUSPEX_CLOUD_WORK_EMAIL}"
+  }
+}

@@ -1,0 +1,128 @@
+name: Publish Dev Container Feature
+
+# Publish the span-auspex Dev Container Feature to GitHub Container Registry so customers can reference it
+# by a stable OCI ref instead of vendoring the source. Manual only (`workflow_dispatch`): putting a Feature
+# version in front of users is a human go-live decision, deliberately decoupled from merging a change to
+# the Feature. Dispatch ONLY from `main` — the first job step enforces it, so the keyless signature identity
+# always matches the documented `@refs/heads/main` verify pin (see the signing note below).
+#
+# The published ref is  ghcr.io/attuned-corp/auspex-devcontainer-features/span-auspex  (devcontainers/action
+# derives the namespace from ${{ github.repository }}). devcontainers/action reads the version from
+# src/span-auspex/devcontainer-feature.json and pushes the semver-expanded tag set (e.g. 0.3.0 → :0.3.0,
+# :0.3, :0, :latest), so BUMP that `version` in the same PR as any behavioural change to the Feature before
+# dispatching this.
+#
+# ONE-TIME visibility flip: a package first created by GITHUB_TOKEN lands PRIVATE and is administrable only
+# by org owners. Make it PUBLIC once, in the org's Packages → span-auspex → Package settings → Change
+# visibility → Public. Because this repo is PUBLIC, the package landing page then shows THIS repo's README
+# (the customer-facing Feature doc) with real provenance — the whole reason the Feature ships from here and
+# not the private auspex repo. After the first flip it stays public across re-publishes.
+#
+# SIGNING + DIGEST PINNING: the Feature is the TOP of the customer trust chain — its install.sh runs at
+# container build and performs the cosign verification of the downloaded binary — so its OWN authenticity is
+# load-bearing. After the push, resolve the multi-tag push to its immutable manifest DIGEST and cosign-SIGN
+# it keylessly (OIDC → Fulcio → Rekor, no stored key), then print the `@sha256:…` pin + the exact
+# `cosign verify` command to the run summary. Caveat: the devcontainer CLI/spec does NOT verify Feature
+# signatures, so the protection is realised by CUSTOMERS pinning the digest (`…/span-auspex@sha256:…`) after
+# verifying it once out-of-band — the signature is what makes that one-time verification possible.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish-feature
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish span-auspex to ghcr
+    runs-on: ubuntu-latest
+    # Gated on the `release` environment as a deployment gate. NOTE: because this repo is PUBLIC, required
+    # reviewers CAN be added to this environment on the org's GitHub Team plan (unlike the private auspex
+    # repo) — add `Auspex Maintainers` + "Prevent self-review" here to give the Feature-publish dual-control
+    # (closes the audit F3 residual for this path).
+    environment: release
+    # contents:read to check out the Feature source; packages:write to push the OCI artifact to ghcr;
+    # id-token:write for cosign keyless signing (OIDC token → Fulcio).
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      # Publish ONLY from the default branch. workflow_dispatch can be launched from any ref, and the
+      # keyless signature below is minted with the DISPATCH ref's OIDC identity — so a non-main dispatch
+      # would sign as `…/publish-feature.yml@refs/heads/<branch>`, which no longer matches the
+      # `@refs/heads/main`-anchored verify command we print + document. Rather than weaken the pin to
+      # "whatever branch signed it", refuse off-main dispatch so the published trust anchor is always main.
+      - name: Enforce publish from main
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: |
+          echo "::error::publish-feature must be dispatched from 'main' (got '${GITHUB_REF}'). The cosign identity and the documented digest-pin verify command are anchored to refs/heads/main; dispatch from main so the signature matches the published trust pin."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Publish Feature to ghcr
+        uses: devcontainers/action@1082abd5d2bf3a11abccba70eef98df068277772 # v1.4.3
+        with:
+          publish-features: "true"
+          base-path-to-features: "src"
+          # The Feature carries its own version in devcontainer-feature.json; we don't want the action to
+          # create a git tag per feature in this repo.
+          disable-repo-tagging: "true"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pinned cosign (v3.1.2), verified against its published SHA-256 before use — no third-party action,
+      # no Go toolchain. Kept in lock-step with src/span-auspex/install.sh's COSIGN_VERSION so the signer
+      # and the Feature's own bundled cosign agree. ubuntu-latest is amd64.
+      - name: Install cosign (pinned)
+        run: |
+          set -euo pipefail
+          ver=v3.1.2
+          sha=f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf # cosign-linux-amd64
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            -o /usr/local/bin/cosign \
+            "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
+          echo "${sha}  /usr/local/bin/cosign" | sha256sum -c -
+          chmod 0755 /usr/local/bin/cosign
+          cosign version
+
+      # Resolve the just-pushed multi-tag Feature to its immutable manifest digest and keylessly sign THAT
+      # (signing a tag would leave the mutable pointer unsigned). ghcr is derived from the repo owner,
+      # lowercased (ghcr paths are case-sensitive lowercase); the version is read from the same
+      # devcontainer-feature.json the action published from, so tag + signature can't drift.
+      - name: Sign Feature (cosign keyless) + emit digest pin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          owner_lc="$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')"
+          repo_lc="$(printf '%s' "${GITHUB_REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner_lc}/${repo_lc}/span-auspex"
+          version="$(jq -r '.version' src/span-auspex/devcontainer-feature.json)"
+          [ -n "$version" ] && [ "$version" != "null" ] || { echo "::error::could not read Feature version" >&2; exit 1; }
+
+          echo "$GITHUB_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          sha="$(docker buildx imagetools inspect "${image}:${version}" --format '{{.Manifest.Digest}}')"
+          [ -n "$sha" ] || { echo "::error::could not resolve manifest digest for ${image}:${version}" >&2; exit 1; }
+          echo "resolved ${image}:${version} -> ${image}@${sha}"
+
+          cosign sign --yes "${image}@${sha}"
+          {
+            echo "### Feature published + signed"
+            echo ""
+            echo "- Ref: \`${image}:${version}\`"
+            echo "- Digest pin: \`${image}@${sha}\`"
+            echo ""
+            echo "Verify + learn the digest to pin:"
+            echo '```'
+            echo "cosign verify \\"
+            echo "  --certificate-identity-regexp '^https://github\\.com/(?i:attuned-corp)/auspex-devcontainer-features/\\.github/workflows/publish-feature\\.yml@refs/heads/main\$' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  ${image}@${sha}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
