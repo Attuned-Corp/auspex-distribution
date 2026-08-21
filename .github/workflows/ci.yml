@@ -26,5 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: install.sh download-integrity contract
+      # Lint the shared recipe + installer + bootstrap + assembler + test (shellcheck is preinstalled on
+      # the GitHub-hosted ubuntu image).
+      - name: shellcheck
+        run: make shellcheck
+
+      # Drives install.sh AND the curl|sh bootstrap (checkout + assembled) through every verify tier,
+      # asserting a tampered/absent/identity-mismatched artifact fails CLOSED (nothing installed).
+      - name: install + bootstrap download-verify contract
         run: make verify-test

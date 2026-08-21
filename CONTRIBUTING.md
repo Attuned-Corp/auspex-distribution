@@ -1,4 +1,4 @@
-# Contributing to auspex-devcontainer-features
+# Contributing to auspex-distribution
 
 Thanks for your interest in the `span-auspex` Dev Container Feature. This guide
 covers how to test and propose changes. Please also read the

@@ -10,6 +10,57 @@ The feature source lives in [`src/span-auspex/`](./src/span-auspex). The install
 that exercises it lives in [`tests/`](./tests). See [`CHANGELOG.md`](./CHANGELOG.md) for release notes —
 what changed in the Feature and the installers.
 
+> **This repo is auspex's public distribution / trust surface.** Besides the Dev Container Feature it hosts
+> the standalone **`curl | sh` / PowerShell installers** ([`bootstrap/`](./bootstrap)) and the shared
+> **verify recipe + Sigstore trust anchor** ([`src/span-auspex/verify-lib.sh`](./src/span-auspex/verify-lib.sh)
+> + `trusted_root.json`) — a deliberate **second origin, independent of the artifact CDN**. All three
+> consumers (Feature, bootstrap, MDM gate) share the one recipe; see [Network access](./docs/networking.md).
+
+## Installing outside a dev container (`curl | sh` / PowerShell)
+
+For laptops / CI / non-devcontainer hosts, a piped installer fetches the raw binary for your OS/arch **from
+your auspex distribution host** (passed via `--base-url`), **verifies it fail-closed** against the pinned
+release identity + Sigstore trust anchor (the same recipe the Feature uses), and places it on `PATH`. The
+installers themselves are served from this repo's **GitHub Releases** (origin #2, independent of the artifact
+host). This repo is **host-agnostic** — the artifact host is **not** baked in (matching the Feature's
+pluggable `binaryUri`); your install instructions provide the exact `--base-url`:
+
+```bash
+# macOS / Linux
+curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.sh \
+  | sh -s -- --version v0.1.0 --base-url <your-auspex-distribution-host>
+```
+
+```powershell
+# Windows
+& ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -Version v0.1.0 -BaseUrl <your-auspex-distribution-host>
+```
+
+Flags: `--version <tag>` (required — no `latest` alias on the download host), `--base-url <url>` /
+`AUSPEX_BASE_URL` (**required** unless `--url` — your auspex distribution host, from your install
+instructions, or an internal mirror), `--verify cosign|checksum|none` (default `cosign`), `--bin-dir <dir>`,
+and `AUSPEX_COSIGN_BASE_URL` (mirror the pinned cosign CLI for air-gapped installs). Same verify tiers as the
+Feature.
+
+> **The piped script cannot verify its own bytes** — its integrity roots in TLS + origin. For higher
+> assurance, each Release asset is cosign-signed (a `.cosign.bundle` beside it): download, verify the
+> installer's own signature with a pre-present cosign, then run it. The truly self-verifying acquisition is
+> the packaged / notarized / MDM channel (the platform is the pre-present verifier). See
+> [Network access](./docs/networking.md) for the per-path host allow-lists and the offline story.
+
+The installers are **assembled** ([`bootstrap/assemble.sh`](./bootstrap/assemble.sh)) from the one
+`verify-lib.sh` recipe with `trusted_root.json` embedded — there is no bootstrap-specific copy of the trust
+material.
+
+## Managed installs (MDM verify-before-install gate)
+
+For fleet deploys via MDM (macOS Mosyle `.pkg` / Windows Intune `.msi`), a **pre-install gate** verifies the
+signed OS-native package against the pinned cosign release identity — adding **build provenance** on top of
+Gatekeeper / Authenticode — and **refuses to install on any failure**. It reuses the same `verify-lib.sh`
+recipe; the self-contained `auspex-verify-gate.sh` / `.ps1` are published alongside the installers on GitHub
+Releases. Integration recipes (Mosyle Custom Command, Intune Win32 wrapper), the exit-code contract, and the
+network allow-list are in [`mdm/README.md`](./mdm/README.md).
+
 ## What it does
 
 | Phase | Command | Effect |
@@ -36,7 +87,7 @@ below). A copy-paste starting point lives in [`examples/devcontainer.json`](./ex
     // Published Feature (see "Publishing / consuming the Feature"). Pin to the major (:0) for
     // non-breaking updates, a full :0.3.0 to freeze the version, or — strongest — an immutable
     // @sha256:… digest you verified once with cosign (see "Publishing / consuming the Feature").
-    "ghcr.io/attuned-corp/auspex-devcontainer-features/span-auspex:0": {
+    "ghcr.io/attuned-corp/auspex-distribution/span-auspex:0": {
       // Raw per-os/arch binary on your download host. {{version}} is substituted from the `version`
       // option below; swap amd64 → arm64 for an arm container. The default verify: cosign keyless-verifies
       // the signed checksums.txt against auspex's release identity (auto-provisions cosign; no Sigstore
@@ -132,16 +183,20 @@ cosign verify-blob \
 
 ### Updating the pinned cosign / trust root
 
-`verify: cosign` is self-contained by pinning three things in the Feature source
-([`src/span-auspex/`](./src/span-auspex)): the cosign **version** + per-arch **SHA-256** (`install.sh`
-`COSIGN_VERSION` / `COSIGN_SHA256_amd64` / `COSIGN_SHA256_arm64`) and the Sigstore **`trusted_root.json`**.
-Keep `COSIGN_VERSION` in lock-step with the **signer** — the auspex repo's `Makefile.setup.mk` `COSIGN_VERSION`, the version
-the release workflow signs with — and bump them together:
+`verify: cosign` is self-contained by pinning three things in the **shared verify recipe**
+([`src/span-auspex/verify-lib.sh`](./src/span-auspex/verify-lib.sh)): the cosign **version**
+(`COSIGN_VERSION`) + per-os/arch **SHA-256** (`COSIGN_SHA256_linux_amd64` / `_linux_arm64` /
+`_darwin_amd64` / `_darwin_arm64` / `_windows_amd64`) and the Sigstore **`trusted_root.json`** beside it.
+These pins are the **single source of truth** shared by the Feature, the `curl|sh` + PowerShell bootstrap,
+and the MDM gate; the `reconcile-trust` guard fails CI if `COSIGN_VERSION` / the identity / the issuer drift
+from the auspex signer's descriptor. Keep `COSIGN_VERSION` in lock-step with the **signer** — the auspex
+repo's `Makefile.setup.mk` `COSIGN_VERSION`, the version the release workflow signs with — and bump them
+together:
 
 ```bash
-# 1) match the signer's version, then capture the release binary hashes for that tag:
+# 1) match the signer's version, then capture the release binary hashes for that tag (all pinned platforms):
 curl -fsSL https://github.com/sigstore/cosign/releases/download/<vX.Y.Z>/cosign_checksums.txt \
-  | grep -E 'cosign-linux-(amd64|arm64)$'
+  | grep -E 'cosign-(linux|darwin)-(amd64|arm64)$|cosign-windows-amd64\.exe$'
 # 2) refresh the pinned Sigstore trust root (only when cosign or Sigstore rotates roots):
 cosign initialize
 cp ~/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json \
@@ -160,7 +215,7 @@ archive for the license text.
 ## Publishing / consuming the Feature
 
 The Feature is published to **GitHub Container Registry** as
-`ghcr.io/attuned-corp/auspex-devcontainer-features/span-auspex`, versioned from the `version` in
+`ghcr.io/attuned-corp/auspex-distribution/span-auspex`, versioned from the `version` in
 [`devcontainer-feature.json`](./src/span-auspex/devcontainer-feature.json) (e.g. `0.3.0` publishes
 `:0.3.0`, `:0.3`, `:0`, `:latest`). Consumers reference it directly (see [Usage](#usage)) — no vendoring
 of the source.
@@ -184,12 +239,12 @@ mutable tag. Learn (and verify) the digest once:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/(?i:attuned-corp)/auspex-devcontainer-features/\.github/workflows/publish-feature\.yml@refs/heads/main$' \
+  --certificate-identity-regexp '^https://github\.com/(?i:attuned-corp)/auspex-distribution/\.github/workflows/publish-feature\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/attuned-corp/auspex-devcontainer-features/span-auspex:0.3.0
+  ghcr.io/attuned-corp/auspex-distribution/span-auspex:0.3.0
 ```
 
-cosign prints the verified digest; pin it as `ghcr.io/attuned-corp/auspex-devcontainer-features/span-auspex@sha256:<digest>`.
+cosign prints the verified digest; pin it as `ghcr.io/attuned-corp/auspex-distribution/span-auspex@sha256:<digest>`.
 Note: the devcontainer CLI does **not** verify Feature signatures itself, so a digest pin (plus this
 one-time out-of-band `cosign verify`) is what turns the signature into real protection; a bare `:0` /
 `:0.3.0` tag is convenient but mutable.
@@ -411,13 +466,22 @@ does not require them. This is a Codex-in-container requirement, independent of 
 ## CI / testing
 
 ```bash
-make verify-test    # install.sh download-integrity contract — pure bash+HTTP, no Docker
+make verify-test    # install.sh + curl|sh bootstrap download-verify contract — pure bash+HTTP, no Docker
+make assemble       # build dist/auspex-install.sh|.ps1 from the shared recipe (Release assets)
+make shellcheck     # lint all shell scripts
 ```
 
-`verify-test` serves a fixture binary + `.sha256` over localhost and drives `install.sh` through every
-`verify:` mode, asserting a tampered/absent checksum fails closed (nothing installed) and a matching one
-installs — the fast gate that runs on every PR (see [`ci.yml`](./.github/workflows/ci.yml)). It also proves
-the pinned-cosign hash gate refuses a tampered downloaded cosign.
+`verify-test` serves a fixture binary + `.sha256` over localhost and drives **both** `install.sh` and the
+`curl|sh` bootstrap (in its repo-checkout form *and* the assembled release form with the trust anchor
+embedded) through every `verify:` tier, asserting a tampered/absent/identity-mismatched artifact fails
+closed (nothing installed) and a matching one installs — the fast gate that runs on every PR (see
+[`ci.yml`](./.github/workflows/ci.yml)). It also proves the pinned-cosign hash gate refuses a tampered
+downloaded cosign.
+
+Two more workflows guard the trust surface: [`reconcile-trust.yml`](./.github/workflows/reconcile-trust.yml)
+diffs this repo's verifier config against the auspex signer's descriptor at a pinned ref (AC5), and
+[`release-bootstrap.yml`](./.github/workflows/release-bootstrap.yml) assembles + cosign-signs the installers
+and cuts a Release.
 
 > **Docker-backed behavioural smoke (follow-up).** The full `devcontainer up` smoke — bring a throwaway
 > container up through this Feature and assert one synthetic capture event reaches the local sink with

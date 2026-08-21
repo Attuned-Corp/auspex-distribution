@@ -1,6 +1,8 @@
 # Build / test staging
 /bin/
 /staging/
+# assembled bootstrap installers (bootstrap/assemble.sh output) — built in CI, published to Releases
+/dist/
 
 # OS / editor cruft
 .DS_Store

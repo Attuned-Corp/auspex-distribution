@@ -1,0 +1,11 @@
+# Pinned auspex ref the reconcile guard (.github/workflows/reconcile-trust.yml) fetches the SIGNING
+# DESCRIPTOR from — tools/release/signing-identity.env (identity regexp + OIDC issuer) and
+# Makefile.setup.mk (COSIGN_VERSION) — to diff against this repo's verifier config (src/span-auspex/verify-lib.sh).
+#
+# Set this to a full 40-char commit SHA for tamper-evidence (git content at a pinned SHA is
+# content-addressed, unlike a mutable branch). Bump it in a CODEOWNERS-gated PR when auspex's signing
+# descriptor legitimately changes.
+#
+# The guard reads the first non-comment, non-blank line below.
+# Pinned to Attuned-Corp/auspex#251 (single-source cosign release identity + drift guard), merged to main.
+b70df70afa7e97487e11ff89e22bbf42567f82ca

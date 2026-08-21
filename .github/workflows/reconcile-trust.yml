@@ -1,0 +1,107 @@
+name: Reconcile trust material
+
+# AC5 (distribution-repo half) — the cross-repo drift guard. auspex is canonical for its SIGNING DESCRIPTOR
+# (the identity regexp + OIDC issuer it signs with, single-homed in auspex tools/release/signing-identity.env,
+# plus COSIGN_VERSION in Makefile.setup.mk). This repo owns the VERIFIER CONFIG (src/span-auspex/verify-lib.sh
+# + trusted_root.json). Those two must agree on the OVERLAPPING fields (identity / issuer / cosign version),
+# or a verifier here would trust the wrong signer. This guard PULLS auspex's descriptor at a PINNED ref
+# (.github/auspex-signing-ref) via a read-only GitHub App and diffs it against verify-lib.sh, failing on any
+# drift. Direction is one-way (this repo pulls; auspex stays passive); a pinned SHA is content-addressed /
+# tamper-evident. If auspex ever goes public the token drops away.
+#
+# trusted_root.json tracks Sigstore (not auspex), so it has no auspex copy to reconcile — this repo owns
+# keeping it current (README "Updating the pinned cosign / trust root").
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  reconcile:
+    name: Diff verifier config against auspex signing descriptor
+    runs-on: ubuntu-latest
+    # Skip fork PRs — the App credential (an environment secret) is never exposed to forks, so the job would
+    # only fail spuriously. Same-repo PRs + push-to-main carry the secret.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # The read-only cross-repo App credential lives in a DEDICATED, UNPROTECTED environment (no required
+    # reviewers / no branch policy) so this per-PR guard runs unattended — NOT the `release` deployment
+    # environment (whose required reviewers would pause every run). Create env `ssot-reconcile` with the two
+    # secrets AUSPEX_SSOT_APP_ID + AUSPEX_SSOT_APP_PRIVATE_KEY.
+    environment: ssot-reconcile
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Mint a short-lived installation token scoped READ-ONLY to auspex contents (the App is installed on
+      # Attuned-Corp/auspex with Contents: Read). No PAT, no write scope.
+      - name: Mint read-only auspex token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.AUSPEX_SSOT_APP_ID }}
+          private-key: ${{ secrets.AUSPEX_SSOT_APP_PRIVATE_KEY }}
+          owner: Attuned-Corp
+          repositories: auspex
+
+      - name: Diff against auspex signing descriptor at the pinned ref
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          ref="$(grep -vE '^\s*#' .github/auspex-signing-ref | grep -vE '^\s*$' | head -1)"
+          [ -n "$ref" ] || { echo "::error::no pinned ref in .github/auspex-signing-ref"; exit 1; }
+          echo "reconciling against auspex@${ref}"
+
+          # Pull auspex's signing descriptor (raw) at the pinned ref via the read-only App token.
+          fetch_raw() { # <path>
+            gh api "repos/Attuned-Corp/auspex/contents/$1?ref=${ref}" \
+              -H "Accept: application/vnd.github.raw"
+          }
+          signing_env="$(fetch_raw tools/release/signing-identity.env)"
+          setup_mk="$(fetch_raw Makefile.setup.mk)"
+
+          val() { # <var> <text> — value of VAR='...' or VAR=... (first match)
+            printf '%s\n' "$2" | sed -n "s/^$1='\{0,1\}\([^']*\)'\{0,1\}.*/\1/p" | head -1
+          }
+
+          # auspex (canonical signer). signing-identity.env is shell (VAR='...'); Makefile.setup.mk is make
+          # syntax (COSIGN_VERSION := v3.1.2), so parse the version with a make-aware matcher.
+          a_identity="$(val COSIGN_IDENTITY_REGEXP "$signing_env")"
+          a_issuer="$(val COSIGN_OIDC_ISSUER "$signing_env")"
+          a_cosign="$(printf '%s\n' "$setup_mk" | sed -n 's/^[[:space:]]*COSIGN_VERSION[[:space:]]*[:?]\{0,1\}=[[:space:]]*\([^[:space:]#]*\).*/\1/p' | head -1)"
+
+          # this repo (verifier config)
+          LIB=src/span-auspex/verify-lib.sh
+          v_identity="$(val COSIGN_IDENTITY_RE "$(cat "$LIB")")"
+          v_issuer="$(val COSIGN_OIDC_ISSUER "$(cat "$LIB")")"
+          v_cosign="$(val COSIGN_VERSION "$(cat "$LIB")")"
+
+          rc=0
+          check() { # <field> <auspex> <verifier>
+            if [ -z "$2" ]; then echo "::error::could not read $1 from auspex@${ref}"; rc=1; return; fi
+            if [ -z "$3" ]; then echo "::error::could not read $1 from ${LIB}"; rc=1; return; fi
+            if [ "$2" != "$3" ]; then
+              echo "::error::DRIFT in $1:"
+              echo "  auspex@${ref}: $2"
+              echo "  ${LIB}:        $3"
+              rc=1
+            else
+              echo "ok $1: $2"
+            fi
+          }
+          check "certificate-identity-regexp" "$a_identity" "$v_identity"
+          check "oidc-issuer"                 "$a_issuer"   "$v_issuer"
+          check "cosign version"              "$a_cosign"   "$v_cosign"
+
+          [ "$rc" -eq 0 ] || { echo "::error::verifier config has drifted from auspex's signing descriptor — reconcile before merging"; exit 1; }
+          echo "verifier config is in lock-step with auspex@${ref}"
