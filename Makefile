@@ -12,7 +12,18 @@ verify-test:
 # binary, which the private auspex repo produces). Until it is reconstituted here, run it from a checkout
 # that can supply a binary, or against a CDN-published release. See README "CI / testing".
 
+# Light structural guard for the public CHANGELOG.md (no leak-check, no release tag-gate — this repo is
+# public and versions its two artifacts independently). --self-test proves the guard bites on bad fixtures.
+.PHONY: validate-changelog validate-changelog-test
+validate-changelog:
+	@./tools/scripts/validate-changelog.sh
+
+validate-changelog-test:
+	@./tools/scripts/validate-changelog.sh --self-test
+
 .PHONY: help
 help:
 	@echo "Targets:"
-	@echo "  verify-test   installer download-integrity contract (pure bash+HTTP; the PR gate)"
+	@echo "  verify-test               installer download-integrity contract (pure bash+HTTP; the PR gate)"
+	@echo "  validate-changelog        structural check of CHANGELOG.md"
+	@echo "  validate-changelog-test   prove the changelog guard bites on bad fixtures"

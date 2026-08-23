@@ -15,6 +15,7 @@ See CONTRIBUTING.md for the full workflow.
 
 ## Checklist
 
+- [ ] `CHANGELOG.md` `## [Unreleased]` updated (or N/A — no user-facing change)
 - [ ] `make verify-test` passes locally (installer download-integrity contract)
 - [ ] Feature `version` in `src/span-auspex/devcontainer-feature.json` bumped if this is a behavioural change
 - [ ] If verification changed: cosign pin (`install.sh` `COSIGN_VERSION` + SHA-256s) and `publish-feature.yml` stay in lock-step; `trusted_root.json` refreshed only if Sigstore roots rotated
