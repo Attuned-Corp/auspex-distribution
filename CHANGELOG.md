@@ -29,6 +29,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Installers** — a piped bootstrap installer, `curl … | sh` (bash, macOS/Linux)
+  and `irm … | iex` (PowerShell, Windows), that fetches the auspex binary for the
+  detected OS/arch from the release CDN, **verifies it fail-closed** (default
+  `verify: cosign` against auspex's pinned release identity; `checksum` and `none`
+  opt-downs), and installs it. Published from this repo's **GitHub Releases** — a
+  second origin, independent of the artifact CDN — and cosign-signed.
+- **MDM verify-gate** — a verify-before-install gate (`mdm/verify-gate.sh` /
+  `.ps1`) for managed installs (macOS Mosyle `.pkg`, Windows Intune `.msi`): the
+  fleet runner verifies the installer and its per-artifact cosign bundle
+  fail-closed against the pinned release identity and **does not install on a
+  verification failure**. Ships with Mosyle / Intune wiring recipes (`mdm/README.md`).
+- **Networking guide** (`docs/networking.md`) — the exact host allow-list each
+  acquisition path needs, the zero-Sigstore-egress verification invariant, and
+  internal-mirror base-URL overrides (`AUSPEX_BASE_URL` / `AUSPEX_COSIGN_BASE_URL`)
+  for egress-restricted / air-gapped fleets.
+
+### Changed
+
+- **Renamed to `auspex-distribution`** (from `auspex-devcontainer-features`) and
+  broadened into the public distribution / trust-surface repo. The Feature's OCI
+  namespace and keyless-signing identity re-anchor to
+  `ghcr.io/attuned-corp/auspex-distribution/span-auspex`; old URLs redirect, but
+  the new coordinates are canonical.
+- **Feature** — `install.sh` now sources **one shared verify recipe**
+  (`src/span-auspex/verify-lib.sh`, also used by the bootstrap and the MDM gate)
+  instead of carrying its own copy of the identity regex / OIDC issuer / cosign
+  pins / trusted root, so there is a single source of trust material. Download
+  verification behavior is at parity (still fail-closed).
+
 ## [2026-08-19]
 
 Initial public availability of the auspex distribution surface.
