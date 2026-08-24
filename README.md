@@ -7,7 +7,8 @@ Scheduled Task) is available to keep a daemon alive. `auspex` is the on-box agen
 it enrolls with and egresses to.
 
 The feature source lives in [`src/span-auspex/`](./src/span-auspex). The installer download-integrity test
-that exercises it lives in [`tests/`](./tests).
+that exercises it lives in [`tests/`](./tests). See [`CHANGELOG.md`](./CHANGELOG.md) for release notes —
+what changed in the Feature and the installers.
 
 ## What it does
 
