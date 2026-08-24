@@ -1,15 +1,21 @@
 name: CI
 
-# Fast gate for the Dev Container Feature installer's download-integrity contract: a PURE bash+HTTP test
-# (no Docker/devcontainer CLI) that drives src/span-auspex/install.sh through every verify: mode and
-# asserts a tampered/absent checksum fails CLOSED. Runs on EVERY PR (no path filter) so it can be a
-# reliable REQUIRED status check — a path-filtered workflow that skips leaves a required check forever
-# "waiting", blocking unrelated (e.g. docs-only) PRs. The test is fast + pure bash, so running it always
-# is cheap.
+# The single PR gate for auspex-distribution. Every PR-blocking check is a JOB here, and the `ci-gate` job
+# at the bottom is the ONE status check to mark "required" in the branch ruleset: it waits on all of them
+# and is green only when they ALL succeeded. Add/remove a job and update ci-gate's `needs:` here; NEVER
+# edit the GitHub ruleset when the CI shape changes — that decoupling is the whole point.
+#
+# Why everything lives in one file: `needs:` (and so the aggregate gate) only works WITHIN a single
+# workflow, so the formerly-separate changelog + reconcile workflows are folded in as jobs. The
+# dispatch / main-only PUBLISH workflows (publish-feature.yml, release-bootstrap.yml) are NOT PR gates and
+# stay separate. Runs on every PR with no path filter so the required check never hangs "waiting" on a
+# skipped run; also on push to main so post-merge drift is caught (the reconcile job's original trigger).
 
 on:
   workflow_dispatch:
   pull_request:
+  push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -35,3 +41,137 @@ jobs:
       # asserting a tampered/absent/identity-mismatched artifact fails CLOSED (nothing installed).
       - name: install + bootstrap download-verify contract
         run: make verify-test
+
+  changelog:
+    name: Validate CHANGELOG.md
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Light structural guard (Keep a Changelog shape, ISO/non-future dates, descending-unique dated
+      # sections, fixed categories) + the prove-it-bites self-test. No leak-check, no release tag-gate.
+      - name: Structure + self-test
+        run: |
+          make validate-changelog
+          make validate-changelog-test
+
+  reconcile:
+    name: Diff verifier config against auspex signing descriptor
+    runs-on: ubuntu-latest
+    # AC5 (distribution-repo half) — cross-repo drift guard. auspex is canonical for its SIGNING DESCRIPTOR
+    # (identity regexp + OIDC issuer in tools/release/signing-identity.env; COSIGN_VERSION in
+    # Makefile.setup.mk). This repo owns the VERIFIER CONFIG (src/span-auspex/verify-lib.sh). They must
+    # agree on the overlapping fields or a verifier here would trust the wrong signer. This pulls auspex's
+    # descriptor at a PINNED ref (.github/auspex-signing-ref) via a read-only GitHub App and diffs it,
+    # failing on drift. One-way (this repo pulls; auspex stays passive). trusted_root.json tracks Sigstore,
+    # not auspex, so it has no auspex copy to reconcile.
+    #
+    # Skip fork PRs — the App credential (an environment secret) is never exposed to forks, so the job
+    # would only fail spuriously. A skipped reconcile makes CI Gate red (skip != success), so a fork PR
+    # must have a maintainer run this; that is intentional (external contributions are not accepted today).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # The read-only cross-repo App credential lives in a DEDICATED, UNPROTECTED environment (no required
+    # reviewers / no branch policy) so this per-PR guard runs unattended — NOT the `release` deployment
+    # environment (whose required reviewers would pause every run). Env `ssot-reconcile` holds the two
+    # secrets AUSPEX_SSOT_APP_ID + AUSPEX_SSOT_APP_PRIVATE_KEY.
+    environment: ssot-reconcile
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Mint a short-lived installation token scoped READ-ONLY to auspex contents (the App is installed on
+      # Attuned-Corp/auspex with Contents: Read). No PAT, no write scope.
+      - name: Mint read-only auspex token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.AUSPEX_SSOT_APP_ID }}
+          private-key: ${{ secrets.AUSPEX_SSOT_APP_PRIVATE_KEY }}
+          owner: Attuned-Corp
+          repositories: auspex
+
+      - name: Diff against auspex signing descriptor at the pinned ref
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          ref="$(grep -vE '^\s*#' .github/auspex-signing-ref | grep -vE '^\s*$' | head -1)"
+          [ -n "$ref" ] || { echo "::error::no pinned ref in .github/auspex-signing-ref"; exit 1; }
+          echo "reconciling against auspex@${ref}"
+
+          # Pull auspex's signing descriptor (raw) at the pinned ref via the read-only App token.
+          fetch_raw() { # <path>
+            gh api "repos/Attuned-Corp/auspex/contents/$1?ref=${ref}" \
+              -H "Accept: application/vnd.github.raw"
+          }
+          signing_env="$(fetch_raw tools/release/signing-identity.env)"
+          setup_mk="$(fetch_raw Makefile.setup.mk)"
+
+          val() { # <var> <text> — value of VAR='...' or VAR=... (first match)
+            printf '%s\n' "$2" | sed -n "s/^$1='\{0,1\}\([^']*\)'\{0,1\}.*/\1/p" | head -1
+          }
+
+          # auspex (canonical signer). signing-identity.env is shell (VAR='...'); Makefile.setup.mk is make
+          # syntax (COSIGN_VERSION := v3.1.2), so parse the version with a make-aware matcher.
+          a_identity="$(val COSIGN_IDENTITY_REGEXP "$signing_env")"
+          a_issuer="$(val COSIGN_OIDC_ISSUER "$signing_env")"
+          a_cosign="$(printf '%s\n' "$setup_mk" | sed -n 's/^[[:space:]]*COSIGN_VERSION[[:space:]]*[:?]\{0,1\}=[[:space:]]*\([^[:space:]#]*\).*/\1/p' | head -1)"
+
+          # this repo (verifier config)
+          LIB=src/span-auspex/verify-lib.sh
+          v_identity="$(val COSIGN_IDENTITY_RE "$(cat "$LIB")")"
+          v_issuer="$(val COSIGN_OIDC_ISSUER "$(cat "$LIB")")"
+          v_cosign="$(val COSIGN_VERSION "$(cat "$LIB")")"
+
+          rc=0
+          check() { # <field> <auspex> <verifier>
+            if [ -z "$2" ]; then echo "::error::could not read $1 from auspex@${ref}"; rc=1; return; fi
+            if [ -z "$3" ]; then echo "::error::could not read $1 from ${LIB}"; rc=1; return; fi
+            if [ "$2" != "$3" ]; then
+              echo "::error::DRIFT in $1:"
+              echo "  auspex@${ref}: $2"
+              echo "  ${LIB}:        $3"
+              rc=1
+            else
+              echo "ok $1: $2"
+            fi
+          }
+          check "certificate-identity-regexp" "$a_identity" "$v_identity"
+          check "oidc-issuer"                 "$a_issuer"   "$v_issuer"
+          check "cosign version"              "$a_cosign"   "$v_cosign"
+
+          [ "$rc" -eq 0 ] || { echo "::error::verifier config has drifted from auspex's signing descriptor — reconcile before merging"; exit 1; }
+          echo "verifier config is in lock-step with auspex@${ref}"
+
+  # The ONE status check to mark "required" in the branch ruleset. It waits on every job above and is green
+  # only when they ALL succeeded — so the required-check config is decoupled from the job topology.
+  ci-gate:
+    name: CI Gate
+    # always(): run even when a needed job failed or was skipped, so the gate can turn the run red. Without
+    # it a skipped dependency would skip the gate too, and GitHub reads a skipped required check as a PASS —
+    # the exact hole this job exists to close.
+    if: ${{ always() }}
+    needs:
+      - install-verify
+      - changelog
+      - reconcile
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Assert every required job succeeded
+        env:
+          # Space-joined result of each needed job: "success", "failure", "cancelled", or "skipped".
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "dependency results: ${RESULTS}"
+          for r in ${RESULTS}; do
+            if [ "${r}" != "success" ]; then
+              echo "::error::a required job did not succeed (result: ${r}) — CI Gate fails"
+              exit 1
+            fi
+          done
+          echo "all required jobs succeeded — CI Gate passes"
