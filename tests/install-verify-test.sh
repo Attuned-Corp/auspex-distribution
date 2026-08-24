@@ -9,8 +9,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_SH="${REPO_ROOT}/src/span-auspex/install.sh"
+VERIFY_LIB="${REPO_ROOT}/src/span-auspex/verify-lib.sh"
 [ -f "$INSTALL_SH" ] || {
   echo "FAIL: installer not found at ${INSTALL_SH}" >&2
+  exit 1
+}
+[ -f "$VERIFY_LIB" ] || {
+  echo "FAIL: shared verify library not found at ${VERIFY_LIB}" >&2
   exit 1
 }
 
@@ -30,7 +35,7 @@ mkdir -p "$WEBROOT"
 PORT_FILE="$WORK/port"
 SERVER_PID=""
 cleanup() {
-  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" >/dev/null 2>&1 || true
+  if [ -n "$SERVER_PID" ]; then kill "$SERVER_PID" >/dev/null 2>&1 || true; fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -206,7 +211,7 @@ cosign_check "cosign-bad-signature"   fail 1 yes
 # AUSPEX_COSIGN_BASE_URL and checks the hardcoded per-arch SHA-256 — serve wrong bytes → must fail closed.
 # Linux-only (ensure_cosign auto-provisions only on Linux) and only meaningful when cosign isn't on PATH.
 if [ "$(uname -s)" = "Linux" ] && ! command -v cosign >/dev/null 2>&1; then
-  cver="$(sed -n "s/^COSIGN_VERSION='\\(.*\\)'/\\1/p" "$INSTALL_SH" | head -1)"
+  cver="$(sed -n "s/^COSIGN_VERSION='\\(.*\\)'/\\1/p" "$VERIFY_LIB" | head -1)"
   case "$(uname -m)" in x86_64 | amd64) carch=amd64 ;; aarch64 | arm64) carch=arm64 ;; *) carch="" ;; esac
   if [ -n "$cver" ] && [ -n "$carch" ]; then
     setup_cosign_layout yes
@@ -240,6 +245,98 @@ if [ "$(uname -s)" = "Linux" ] && ! command -v cosign >/dev/null 2>&1; then
 else
   echo "skip [cosign-pinned-hash-gate]: needs Linux without a cosign already on PATH"
 fi
+
+# ---- curl|sh bootstrap (AC1/AC2/AC3) -----------------------------------------------------------------
+# The bootstrap shares the SAME verify recipe (src/span-auspex/verify-lib.sh). Drive it two ways: the
+# repo-checkout form (bootstrap/bootstrap.sh sources the lib) AND the assembled release form
+# (dist/auspex-install.sh with the lib inlined + trusted_root.json embedded) — proving the assembled
+# installer verifies fail-closed with its EMBEDDED anchor, not just the checkout. Same fixture + stub cosign.
+BOOTSTRAP_SH="${REPO_ROOT}/bootstrap/bootstrap.sh"
+ASSEMBLED_SH="${WORK}/auspex-install.sh"
+"${REPO_ROOT}/bootstrap/assemble.sh" "$ASSEMBLED_SH" >/dev/null
+
+boot_check() { # <label> <expect ok|fail> <script> <verify-mode> <url> <sidecar good|bad|none> <extra-path>
+  local label="$1" expect="$2" script="$3" mode="$4" url="$5" sidecar="$6" extra_path="${7:-}"
+  case "$sidecar" in
+    good) printf '%s  auspex\n' "$GOOD_SUM" >"$WEBROOT/auspex.sha256" ;;
+    bad) printf '%s  auspex\n' "0000000000000000000000000000000000000000000000000000000000000000" >"$WEBROOT/auspex.sha256" ;;
+    none) rm -f "$WEBROOT/auspex.sha256" ;;
+  esac
+  local bootdir="$WORK/bootdest" rc=0
+  rm -rf "$bootdir"
+  env -i PATH="${extra_path:+$extra_path:}$PATH" \
+    bash "$script" --url "$url" --verify "$mode" --bin-dir "$bootdir" >"$WORK/out.log" 2>&1 || rc=$?
+  local got="ok"
+  [ "$rc" -ne 0 ] && got="fail"
+  if [ "$got" != "$expect" ]; then
+    echo "FAIL [$label]: expected $expect but ${got}ed (rc=$rc)" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$expect" = "ok" ] && { [ ! -x "$bootdir/auspex" ] || ! cmp -s "$WEBROOT/auspex" "$bootdir/auspex"; }; then
+    echo "FAIL [$label]: reported success but ${bootdir}/auspex is missing/wrong" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$expect" = "fail" ] && [ -e "$bootdir/auspex" ]; then
+    echo "FAIL [$label]: refused install still left a binary (must fail closed)" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: bootstrap ${got} as expected"
+  pass=$((pass + 1))
+}
+
+echo "==> curl|sh bootstrap contract (checkout + assembled)"
+boot_check "boot-checksum-match"      ok   "$BOOTSTRAP_SH" checksum "${BASE}/auspex" good
+boot_check "boot-checksum-mismatch"   fail "$BOOTSTRAP_SH" checksum "${BASE}/auspex" bad
+boot_check "boot-none-skips"          ok   "$BOOTSTRAP_SH" none     "${BASE}/auspex" none
+
+# cosign tier (stub cosign on PATH): checkout form uses the on-disk trusted_root.json; assembled form uses
+# its EMBEDDED root (AUSPEX_TRUSTED_ROOT set by the assembled preamble). Both must fail closed when the
+# digest is absent from the (stub-)verified checksums.txt.
+setup_cosign_layout yes
+make_stub_cosign 0
+boot_check "boot-cosign-checkout"     ok   "$BOOTSTRAP_SH" cosign "${BASE}/${COSIGN_RELDIR}/auspex" good "$STUB_DIR"
+boot_check "boot-cosign-assembled"    ok   "$ASSEMBLED_SH" cosign "${BASE}/${COSIGN_RELDIR}/auspex" good "$STUB_DIR"
+setup_cosign_layout no
+boot_check "boot-cosign-digest-absent" fail "$ASSEMBLED_SH" cosign "${BASE}/${COSIGN_RELDIR}/auspex" good "$STUB_DIR"
+make_stub_cosign 1
+setup_cosign_layout yes
+boot_check "boot-cosign-bad-signature" fail "$ASSEMBLED_SH" cosign "${BASE}/${COSIGN_RELDIR}/auspex" good "$STUB_DIR"
+
+# ---- MDM verify-before-install gate (AC7) ------------------------------------------------------------
+# The gate reuses the SAME recipe via verify_cosign_bundle (bundle-direct over the .pkg/.msi bytes — no
+# checksums.txt indirection). A pure-bash harness can't mint a real signature, so drive the cosign wiring
+# with the STUB cosign (verify-blob → configurable exit) and assert the FAIL-CLOSED behavior + the exact
+# exit-code contract (AC2) the MDM wrapper keys on: 0 verified · 13 bad-sig/identity · 11 fetch (no bundle).
+GATE_SH="${REPO_ROOT}/mdm/verify-gate.sh"
+
+gate_check() { # <label> <expect-rc> <stub-exit|nostub> <bundle: good|missing> [verify-mode]
+  local label="$1" expect_rc="$2" stub="$3" bundlemode="$4" mode="${5:-cosign}" rc=0
+  local pkg="$WORK/auspex.pkg" bundle="$WORK/auspex.pkg.cosign.bundle"
+  printf 'fake-auspex-pkg-%s' "$(date +%s)" >"$pkg"
+  if [ "$bundlemode" = good ]; then printf 'dummy-per-artifact-bundle\n' >"$bundle"; else rm -f "$bundle"; fi
+  local path_pre=""
+  [ "$stub" != nostub ] && { make_stub_cosign "$stub"; path_pre="${STUB_DIR}:"; }
+  env -i PATH="${path_pre}$PATH" \
+    bash "$GATE_SH" --installer "$pkg" --verify "$mode" >"$WORK/out.log" 2>&1 || rc=$?
+  if [ "$rc" != "$expect_rc" ]; then
+    echo "FAIL [$label]: expected rc=$expect_rc but got rc=$rc" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: gate rc=$rc as expected"
+  pass=$((pass + 1))
+}
+
+echo "==> MDM verify-before-install gate contract"
+gate_check "gate-verifies"       0  0      good           # stub cosign OK  → verified, safe to install
+gate_check "gate-bad-signature"  13 1      good           # cosign rejects  → EX_COSIGN, fail closed
+gate_check "gate-missing-bundle" 11 0      missing         # no .cosign.bundle → EX_FETCH, fail closed
+gate_check "gate-none-skips"     0  nostub missing none    # explicit opt-out skips verify (needs no cosign)
 
 echo "==> ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

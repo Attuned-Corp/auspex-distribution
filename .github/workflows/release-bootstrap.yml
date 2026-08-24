@@ -1,0 +1,109 @@
+name: Release install surface
+
+# Cut a GitHub Release carrying the SELF-CONTAINED install surface (origin #2, independent of the artifact
+# CDN) assembled from the ONE verify recipe + embedded trust anchor: the curl|sh + PowerShell bootstrap
+# installers AND the macOS/Windows MDM verify-before-install gate (mdm/). Manual only
+# (workflow_dispatch): publishing install surface is a human go-live decision, and — because the bootstrap
+# is VERSION-RESOLVING (resolves the auspex release at run time / takes --version) — the repo needs a new
+# release only when the scripts or the (rarely-changing) trust anchor change, NOT per auspex release.
+#
+# Consumers fetch the immutable per-tag asset, or the mutable `latest/download` alias GitHub maintains for
+# the newest non-prerelease release:
+#   https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.sh
+# The assets are cosign keyless-signed (a .cosign.bundle each) so the security-conscious can verify-then-run
+# the installer's OWN bytes before piping it (the default piped path roots in TLS + origin — a piped script
+# cannot verify itself). A checksums.txt covers all assets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (e.g. bootstrap-v1). Must be a fresh tag."
+        required: true
+      prerelease:
+        description: "Mark as prerelease (excluded from latest/download)?"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-bootstrap
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  release:
+    name: Assemble + publish bootstrap installers
+    runs-on: ubuntu-latest
+    # Deployment gate: add required reviewers ("Auspex Maintainers", prevent self-review) to the `release`
+    # environment so publishing the trust surface is dual-controlled (this repo is PUBLIC, so required
+    # reviewers are available on the GitHub Team plan).
+    environment: release
+    permissions:
+      contents: write   # create the Release + upload assets
+      id-token: write   # cosign keyless signing (OIDC -> Fulcio)
+    steps:
+      # Sign from the default branch only: the keyless signature is minted with the DISPATCH ref's OIDC
+      # identity, and the documented verify identity is anchored to refs/heads/main. Refuse off-main so the
+      # published installer's signature always matches the documented pin.
+      - name: Enforce publish from main
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: |
+          echo "::error::release-bootstrap must be dispatched from 'main' (got '${GITHUB_REF}')."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Assemble installers from the shared recipe
+        run: make assemble
+
+      # Pinned cosign, verified against its published SHA-256 before use (kept in lock-step with
+      # src/span-auspex/verify-lib.sh COSIGN_VERSION). ubuntu-latest is amd64.
+      - name: Install cosign (pinned)
+        run: |
+          set -euo pipefail
+          ver="$(sed -n "s/^COSIGN_VERSION='\(.*\)'\$/\1/p" src/span-auspex/verify-lib.sh | head -1)"
+          sha="$(sed -n "s/^COSIGN_SHA256_linux_amd64='\(.*\)'\$/\1/p" src/span-auspex/verify-lib.sh | head -1)"
+          [ -n "$ver" ] && [ -n "$sha" ] || { echo "::error::could not read pinned cosign version/sha from verify-lib.sh"; exit 1; }
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            -o /usr/local/bin/cosign \
+            "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
+          echo "${sha}  /usr/local/bin/cosign" | sha256sum -c -
+          chmod 0755 /usr/local/bin/cosign
+          cosign version
+
+      - name: Sign installers + gate (cosign keyless) + checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          assets=(auspex-install.sh auspex-install.ps1 auspex-verify-gate.sh auspex-verify-gate.ps1)
+          for f in "${assets[@]}"; do
+            cosign sign-blob --yes --bundle "${f}.cosign.bundle" "$f"
+          done
+          sha256sum "${assets[@]}" > checksums.txt
+
+      - name: Create Release with installer assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=(--title "$TAG" --notes "Self-contained auspex install surface (curl|sh + PowerShell bootstrap, MDM verify-before-install gate), assembled from the shared verify recipe. See README → Installing outside a dev container and mdm/README.md.")
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "$TAG" "${flags[@]}" \
+            dist/auspex-install.sh \
+            dist/auspex-install.sh.cosign.bundle \
+            dist/auspex-install.ps1 \
+            dist/auspex-install.ps1.cosign.bundle \
+            dist/auspex-verify-gate.sh \
+            dist/auspex-verify-gate.sh.cosign.bundle \
+            dist/auspex-verify-gate.ps1 \
+            dist/auspex-verify-gate.ps1.cosign.bundle \
+            dist/checksums.txt
+          {
+            echo "### Bootstrap installers published"
+            echo ""
+            echo "- Tag: \`${TAG}\`"
+            echo "- Latest alias: \`https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/auspex-install.sh\`"
+          } >> "$GITHUB_STEP_SUMMARY"

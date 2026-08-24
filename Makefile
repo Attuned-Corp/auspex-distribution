@@ -8,6 +8,18 @@
 verify-test:
 	@./tests/install-verify-test.sh
 
+# Assemble the self-contained curl|sh + PowerShell installers (dist/auspex-install.sh|.ps1) from the ONE
+# verify recipe + embedded trust root. CI runs this before uploading the Release assets (origin #2).
+.PHONY: assemble
+assemble:
+	@./bootstrap/assemble.sh
+
+# Lint every shell script (the shared recipe, installer, bootstrap, assembler, tests). Requires shellcheck.
+.PHONY: shellcheck
+shellcheck:
+	@shellcheck -x src/span-auspex/verify-lib.sh src/span-auspex/install.sh \
+		bootstrap/bootstrap.sh bootstrap/assemble.sh mdm/verify-gate.sh tests/install-verify-test.sh
+
 # Docker-backed behavioural smoke of the Feature is a follow-up in this repo (it needs a built auspex
 # binary, which the private auspex repo produces). Until it is reconstituted here, run it from a checkout
 # that can supply a binary, or against a CDN-published release. See README "CI / testing".
@@ -24,6 +36,8 @@ validate-changelog-test:
 .PHONY: help
 help:
 	@echo "Targets:"
-	@echo "  verify-test               installer download-integrity contract (pure bash+HTTP; the PR gate)"
+	@echo "  verify-test               installer + bootstrap download-verify contract (pure bash+HTTP; the PR gate)"
+	@echo "  assemble                  build dist/auspex-install.sh|.ps1 from the shared recipe (Release assets)"
+	@echo "  shellcheck                lint all shell scripts"
 	@echo "  validate-changelog        structural check of CHANGELOG.md"
 	@echo "  validate-changelog-test   prove the changelog guard bites on bad fixtures"

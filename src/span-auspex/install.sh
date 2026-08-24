@@ -21,33 +21,17 @@ SHARE_DIR="${AUSPEX_SHARE_DIR:-/usr/local/share/auspex}"
 BIN_DEST="${AUSPEX_BIN_DEST:-/usr/local/bin/auspex}"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Pinned keyless-signing identity for the auspex release workflow — the binary SIGNER lives in the private
-# Attuned-Corp/auspex repo, so this stays in LOCK-STEP with that repo's .goreleaser.yaml `signs` comment +
-# release.yml verify step, and this repo's README.md (ADR 0033 §4/§5): the cert identity is anchored (^…$)
-# and dot-escaped to the auspex release workflow on a SEMVER tag ref (incl. an
-# optional pre-release, e.g. v1.2.3 / v0.0.1-rc1), owner matched case-insensitively. Anchoring to semver —
-# not any v* tag — keeps the trust surface to the tag shapes the release actually cuts.
-COSIGN_IDENTITY_RE='^https://github\.com/(?i:attuned-corp)/auspex/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
-COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
-
-# Self-provisioned cosign (verify: cosign, the default): the check no longer needs a pre-installed CLI. When
-# cosign is not already on PATH we download a PINNED release binary and verify it against a hardcoded per-arch
-# SHA-256 — the pinned hash is the trust anchor, and it ships inside this (already-trusted) Feature. Keep
-# COSIGN_VERSION in LOCK-STEP with the SIGNER, auspex/Makefile.setup.mk COSIGN_VERSION (the release workflow
-# signs with that version); bump the version + BOTH hashes + trusted_root.json together — see
-# this repo's README.md "Updating the pinned cosign / trust root".
-COSIGN_VERSION='v3.1.2'
-COSIGN_SHA256_amd64='f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf'
-COSIGN_SHA256_arm64='90e7ae0b5dfd60f20816b52c012addf7fc055ebcc7bea4ce81c428ca8518c302'
-COSIGN_BASE_URL="${AUSPEX_COSIGN_BASE_URL:-https://github.com/sigstore/cosign/releases/download}"
-# Pinned Sigstore trust root, shipped beside this script. cosign v3 verifies the new-format bundle's embedded
-# Rekor inclusion proof against these keys, so verify: cosign is FULLY LOCAL — no TUF, no Rekor network.
-TRUSTED_ROOT="${SRC_DIR}/trusted_root.json"
-
-# Download caps (defense-in-depth against a hung / oversized origin during the container build). The ceiling
-# comfortably covers the auspex binary and the ~150 MB cosign release binary.
-FETCH_MAX_TIME="${AUSPEX_FETCH_MAX_TIME:-300}"
-FETCH_MAX_BYTES="${AUSPEX_FETCH_MAX_BYTES:-524288000}" # 500 MiB
+# Verification recipe + pinned trust material (identity regex, OIDC issuer, cosign pins, trusted_root.json,
+# and the fetch/verify functions) live in the SHARED verify library beside this script — the ONE verifier
+# this repo ships, also assembled into the curl|sh bootstrap and sourced by the MDM gate, so there is a
+# single recipe to maintain rather than a per-consumer copy. Sourcing it defines COSIGN_* / TRUSTED_ROOT +
+# fetch / verify_sha256 / verify_cosign / …; TRUSTED_ROOT resolves next to the lib (this same dir once
+# packaged into the Feature). The reconcile guard keeps the pins in lock-step with auspex's signing descriptor.
+# shellcheck disable=SC2034  # consumed by the sourced verify-lib.sh (sets the message voice)
+AUSPEX_VERIFY_LOG_PREFIX="auspex feature"
+# shellcheck source=src/span-auspex/verify-lib.sh
+# shellcheck disable=SC1091  # sourced via a runtime-resolved ${SRC_DIR}; source= above aids `shellcheck -x`
+. "${SRC_DIR}/verify-lib.sh"
 
 mkdir -p "$SHARE_DIR"
 
@@ -77,176 +61,6 @@ case "$VERIFY" in
     exit 1
     ;;
 esac
-
-# True for a loopback URL (the dev/CI fixture harness serves over http on 127.0.0.1/localhost/::1). Loopback
-# never leaves the host, so it is the ONE http source allowed; every real source must be https (see fetch).
-is_loopback_url() {
-  case "$1" in
-    http://127.0.0.1 | http://127.0.0.1:* | http://127.0.0.1/* | \
-      http://localhost | http://localhost:* | http://localhost/* | \
-      'http://[::1]' | 'http://[::1]:'* | 'http://[::1]/'*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-fetch() { # <url> <out> — download via curl or wget; non-zero on any HTTP/transport error.
-  # HTTPS-only with NO protocol downgrade on redirect: a security agent must never fetch its own binary (or
-  # its checksum/signature/cosign) over cleartext, and an https→http redirect must fail closed. http is
-  # permitted ONLY for loopback (the fixture harness). Time + size caps bound a hung/oversized origin.
-  local url="$1" out="$2"
-  case "$url" in
-    https://*) ;;
-    http://*) is_loopback_url "$url" || {
-      echo "auspex feature: refusing to fetch over cleartext http (non-loopback): ${url} — use https" >&2
-      return 1
-    } ;;
-    *)
-      echo "auspex feature: unsupported URL scheme for ${url} — only https (or loopback http) is allowed" >&2
-      return 1
-      ;;
-  esac
-  if command -v curl >/dev/null 2>&1; then
-    # --proto/--proto-redir pin the transport to https for a real (non-loopback) source and block a
-    # downgrade redirect; loopback http needs http in the allowed set.
-    if case "$url" in https://*) true ;; *) false ;; esac; then
-      curl -fsSL --proto '=https' --proto-redir '=https' --max-time "$FETCH_MAX_TIME" --max-filesize "$FETCH_MAX_BYTES" "$url" -o "$out"
-    else
-      curl -fsSL --proto '=http' --max-time "$FETCH_MAX_TIME" --max-filesize "$FETCH_MAX_BYTES" "$url" -o "$out"
-    fi
-  elif command -v wget >/dev/null 2>&1; then
-    if case "$url" in https://*) true ;; *) false ;; esac; then
-      wget -q --https-only --timeout="$FETCH_MAX_TIME" -O "$out" "$url"
-    else
-      wget -q --timeout="$FETCH_MAX_TIME" -O "$out" "$url"
-    fi
-  else
-    echo "auspex feature: neither curl nor wget is available to download from ${url}" >&2
-    exit 1
-  fi
-}
-
-sha256_of() { # <file> — bare hex digest, using whichever tool the base image ships.
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
-  else
-    echo "auspex feature: no sha256sum/shasum available to verify the download — install one or set verify: none" >&2
-    exit 1
-  fi
-}
-
-# Default integrity check: fetch the adjacent <binaryUri>.sha256 sidecar (the publish pipeline emits it
-# next to the raw binary, ADR 0045) and fail CLOSED on any mismatch or a missing sidecar — an unverified
-# download is refused rather than installed. The sidecar is `<digest>  auspex` (GoReleaser/shasum style),
-# so the first field is the expected digest.
-verify_sha256() { # <file> <url>
-  local file="$1" url="$2" sumtmp expected got
-  sumtmp="$(mktemp)"
-  if ! fetch "${url}.sha256" "$sumtmp"; then
-    rm -f "$sumtmp"
-    echo "auspex feature: could not fetch the checksum sidecar ${url}.sha256 — refusing to install an unverified binary (set verify: none to override)" >&2
-    exit 1
-  fi
-  expected="$(awk 'NR==1{print $1}' "$sumtmp")"
-  rm -f "$sumtmp"
-  got="$(sha256_of "$file")"
-  if [ -z "$expected" ] || [ "$expected" != "$got" ]; then
-    echo "auspex feature: SHA-256 mismatch for ${url} (expected '${expected:-<empty>}', got '${got}') — refusing to install" >&2
-    exit 1
-  fi
-  echo "auspex feature: SHA-256 verified (${got})"
-}
-
-# Provision a cosign CLI for verify: cosign. Prefer one already on PATH; otherwise download the PINNED
-# release binary and verify it against the hardcoded per-arch SHA-256 BEFORE using it (fail closed) — that
-# pinned hash, shipped in this trusted Feature, is the trust anchor the whole default check bottoms out in.
-# Echoes nothing; sets COSIGN_BIN (and COSIGN_CLEANUP for a downloaded one). cosign is a static Go binary,
-# so the downloaded one works on glibc and musl/Alpine alike.
-COSIGN_BIN=""
-COSIGN_CLEANUP=""
-ensure_cosign() {
-  if command -v cosign >/dev/null 2>&1; then
-    COSIGN_BIN="cosign"
-    return 0
-  fi
-  local os arch expected
-  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  if [ "$os" != "linux" ]; then
-    echo "auspex feature: verify: cosign auto-provisions a Linux cosign binary; on '${os}' install cosign yourself (it will be used) or use verify: checksum" >&2
-    exit 1
-  fi
-  case "$(uname -m)" in
-    x86_64 | amd64) arch="amd64"; expected="$COSIGN_SHA256_amd64" ;;
-    aarch64 | arm64) arch="arm64"; expected="$COSIGN_SHA256_arm64" ;;
-    *)
-      echo "auspex feature: no pinned cosign for CPU '$(uname -m)' — pre-install cosign on PATH, or use verify: checksum" >&2
-      exit 1
-      ;;
-  esac
-  local url tmp got
-  url="${COSIGN_BASE_URL}/${COSIGN_VERSION}/cosign-linux-${arch}"
-  tmp="$(mktemp)"
-  echo "auspex feature: provisioning pinned cosign ${COSIGN_VERSION} (linux/${arch})"
-  if ! fetch "$url" "$tmp"; then
-    rm -f "$tmp"
-    echo "auspex feature: failed to download cosign ${COSIGN_VERSION} from ${url} — verify: cosign needs egress to github.com (or pre-install cosign / use verify: checksum)" >&2
-    exit 1
-  fi
-  got="$(sha256_of "$tmp")"
-  if [ "$got" != "$expected" ]; then
-    rm -f "$tmp"
-    echo "auspex feature: pinned cosign SHA-256 mismatch (expected ${expected}, got ${got}) — refusing to use a tampered cosign" >&2
-    exit 1
-  fi
-  chmod 0755 "$tmp"
-  COSIGN_BIN="$tmp"
-  COSIGN_CLEANUP="$tmp"
-}
-
-# Provenance check (verify: cosign — the DEFAULT): the raw binary carries no per-file signature, but its
-# digest is in the version-root checksums.txt, and THAT file is cosign-signed by the release workflow (ADR
-# 0033 §4/§5). So: provision cosign (above), derive the version root from the path-encoded binaryUri
-# (.../releases/<v>/<os>/<arch>/auspex → strip <os>/<arch>/<binary>), keyless-verify checksums.txt against
-# the pinned identity + the pinned trusted_root.json (FULLY LOCAL — cosign v3 checks the new-format bundle's
-# embedded Rekor inclusion proof against the shipped keys, no TUF/Rekor network), then confirm the
-# downloaded binary's digest is a line in that now-trusted file. No name-guessing: a digest membership
-# check is version/arch-agnostic and survives verify running before the binary is renamed.
-verify_cosign() { # <file> <url>
-  local file="$1" url="$2" root checks bundle got
-  ensure_cosign
-  if [ ! -f "$TRUSTED_ROOT" ]; then
-    echo "auspex feature: missing pinned trust root at ${TRUSTED_ROOT} — this Feature checkout is incomplete; reinstall it or use verify: checksum" >&2
-    exit 1
-  fi
-  root="$(dirname "$(dirname "$(dirname "$url")")")"
-  checks="$(mktemp)"
-  bundle="$(mktemp)"
-  if ! fetch "${root}/checksums.txt" "$checks" || ! fetch "${root}/checksums.txt.cosign.bundle" "$bundle"; then
-    rm -f "$checks" "$bundle"
-    echo "auspex feature: could not fetch ${root}/checksums.txt(.cosign.bundle) — is this a signed release published under the ADR 0045 layout?" >&2
-    exit 1
-  fi
-  if ! "$COSIGN_BIN" verify-blob \
-    --bundle "$bundle" \
-    --trusted-root "$TRUSTED_ROOT" \
-    --certificate-identity-regexp "$COSIGN_IDENTITY_RE" \
-    --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
-    "$checks" >/dev/null 2>&1; then
-    rm -f "$checks" "$bundle"
-    echo "auspex feature: cosign FAILED to verify ${root}/checksums.txt against the pinned release identity — refusing to install" >&2
-    exit 1
-  fi
-  got="$(sha256_of "$file")"
-  if ! grep -q -- "$got" "$checks"; then
-    rm -f "$checks" "$bundle"
-    echo "auspex feature: the binary's digest ${got} is not present in the cosign-verified checksums.txt — refusing to install" >&2
-    exit 1
-  fi
-  rm -f "$checks" "$bundle"
-  [ -n "$COSIGN_CLEANUP" ] && rm -f "$COSIGN_CLEANUP"
-  echo "auspex feature: cosign-verified (checksums.txt signed by the release workflow; binary digest present)"
-}
 
 case "$BINARY_URI" in
   http://* | https://*)

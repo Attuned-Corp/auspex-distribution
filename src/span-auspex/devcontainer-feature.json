@@ -2,7 +2,7 @@
   "id": "span-auspex",
   "version": "0.3.0",
   "name": "Span Auspex Capture",
-  "documentationURL": "https://github.com/Attuned-Corp/auspex-devcontainer-features",
+  "documentationURL": "https://github.com/Attuned-Corp/auspex-distribution",
   "description": "Installs the auspex capture agent and runs it under the auspex-owned supervisor (no OS service manager), the posture for ephemeral dev containers and cloud agents. onCreate does a service-free, idempotent cold install (wires detected coding tools + arms the cold-start capture relax); postStart (re)launches `auspex daemon --supervise` so the worker is respawned and drained on the orchestrator's resume/stop.",
   "options": {
     "binaryUri": {

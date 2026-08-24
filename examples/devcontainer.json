@@ -7,7 +7,7 @@
     // Published Feature (ghcr). Pin to the major (:0) for non-breaking updates, a full :0.3.0 to freeze
     // the version, or — strongest — an immutable @sha256:… digest verified once with cosign (README →
     // "Signature + digest pinning").
-    "ghcr.io/attuned-corp/auspex-devcontainer-features/span-auspex:0": {
+    "ghcr.io/attuned-corp/auspex-distribution/span-auspex:0": {
       // Replace <your-auspex-download-host> with the download host provided to you at onboarding (must be
       // https). {{version}} is substituted from `version`; use arm64 for an arm container. `verify` defaults
       // to "cosign" — keyless-verifies the signed checksums.txt (auto-provisions cosign; no Sigstore

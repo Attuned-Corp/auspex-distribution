@@ -6,7 +6,7 @@ name: Publish Dev Container Feature
 # the Feature. Dispatch ONLY from `main` — the first job step enforces it, so the keyless signature identity
 # always matches the documented `@refs/heads/main` verify pin (see the signing note below).
 #
-# The published ref is  ghcr.io/attuned-corp/auspex-devcontainer-features/span-auspex  (devcontainers/action
+# The published ref is  ghcr.io/attuned-corp/auspex-distribution/span-auspex  (devcontainers/action
 # derives the namespace from ${{ github.repository }}). devcontainers/action reads the version from
 # src/span-auspex/devcontainer-feature.json and pushes the semver-expanded tag set (e.g. 0.3.0 → :0.3.0,
 # :0.3, :0, :latest), so BUMP that `version` in the same PR as any behavioural change to the Feature before
@@ -76,8 +76,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Pinned cosign (v3.1.2), verified against its published SHA-256 before use — no third-party action,
-      # no Go toolchain. Kept in lock-step with src/span-auspex/install.sh's COSIGN_VERSION so the signer
-      # and the Feature's own bundled cosign agree. ubuntu-latest is amd64.
+      # no Go toolchain. Kept in lock-step with src/span-auspex/verify-lib.sh's COSIGN_VERSION so the signer
+      # and the shared verify recipe agree. ubuntu-latest is amd64.
       - name: Install cosign (pinned)
         run: |
           set -euo pipefail
@@ -121,7 +121,7 @@ jobs:
             echo "Verify + learn the digest to pin:"
             echo '```'
             echo "cosign verify \\"
-            echo "  --certificate-identity-regexp '^https://github\\.com/(?i:attuned-corp)/auspex-devcontainer-features/\\.github/workflows/publish-feature\\.yml@refs/heads/main\$' \\"
+            echo "  --certificate-identity-regexp '^https://github\\.com/(?i:attuned-corp)/auspex-distribution/\\.github/workflows/publish-feature\\.yml@refs/heads/main\$' \\"
             echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
             echo "  ${image}@${sha}"
             echo '```'

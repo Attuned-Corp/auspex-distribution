@@ -11,7 +11,13 @@
 *                                       @Attuned-Corp/auspex-maintainers
 
 # Trust-critical hotspots (already covered by the catch-all; listed for intent + future splits).
+# verify-lib.sh is the ONE verify recipe + pinned trust material (identity/issuer/cosign pins) shared by
+# the Feature, the curl|sh + PowerShell bootstrap, and the MDM gate — the SSOT the reconcile guard checks.
+/src/span-auspex/verify-lib.sh          @Attuned-Corp/auspex-maintainers
 /src/span-auspex/install.sh             @Attuned-Corp/auspex-maintainers
 /src/span-auspex/trusted_root.json      @Attuned-Corp/auspex-maintainers
 /src/span-auspex/devcontainer-feature.json @Attuned-Corp/auspex-maintainers
+/bootstrap/                              @Attuned-Corp/auspex-maintainers
+/mdm/                                    @Attuned-Corp/auspex-maintainers
+/.github/auspex-signing-ref              @Attuned-Corp/auspex-maintainers
 /.github/workflows/                      @Attuned-Corp/auspex-maintainers
