@@ -3,6 +3,8 @@
 /staging/
 # assembled bootstrap installers (bootstrap/assemble.sh output) — built in CI, published to Releases
 /dist/
+# local-only git worktrees (spec-flow initiatives)
+/.worktrees/
 
 # OS / editor cruft
 .DS_Store

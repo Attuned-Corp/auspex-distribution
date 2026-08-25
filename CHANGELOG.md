@@ -31,6 +31,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Pin-by-digest install** (**Feature 0.5.0** + **Installers**) — a `digest`
+  option (`--digest` / `-Digest` for the bootstrap) that pins the **exact
+  artifact by content**: the install fetches it straight from the version-free
+  content-addressed blob store (`<host>/blobs/sha256/<digest>`) and self-verifies
+  `sha256(bytes)==digest`, bypassing version→manifest resolution. A digest is a
+  version-free address (the `@sha256:…`-style pin) that survives a re-tag and
+  needs no cosign/jq — the strongest supply-chain pin for a lockfile or fleet
+  baseline. `version`/`verify` are not consulted for a pinned digest, and a byte
+  mismatch, missing blob, or malformed digest fails closed. Obtain the digest via
+  the by-hand two-hop verification or your org's published pin.
 - **Installers** — a piped bootstrap installer, `curl … | sh` (bash, macOS/Linux)
   and `irm … | iex` (PowerShell, Windows), that fetches the auspex binary for the
   detected OS/arch from the release CDN, **verifies it fail-closed** (default
@@ -59,6 +69,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of carrying its own copy of the identity regex / OIDC issuer / cosign
   pins / trusted root, so there is a single source of trust material. Download
   verification behavior is at parity (still fail-closed).
+- **Verify recipe (shared)** — `verify: cosign` now **resolves a cosign-signed
+  `version→digest` manifest and installs the artifact by digest** from the
+  content-addressed blob store (`blobs/sha256/<digest>`), self-verifying
+  `sha256(bytes)` against the signed digest — replacing the previous check of the
+  binary's digest against a signed `checksums.txt`. The Feature (**0.4.0**), the
+  `curl | sh` + PowerShell installers, and the MDM gate move together (one
+  recipe). The bash tiers auto-provision a pinned, hash-checked **jq** to parse
+  the manifest (the PowerShell installer uses native JSON, no jq);
+  `AUSPEX_JQ_BASE_URL` mirrors it for air-gapped fleets. `verify: checksum` and
+  `none` are unchanged.
+
+### Security
+
+- **Closed a version-substitution gap in `verify: cosign`.** Verification is now
+  bound to the requested release tag: the signed manifest's version annotation
+  must equal the tag in the install URL, and the bytes are fetched by the
+  manifest's signed digest — so one release's artifact can no longer be served
+  under a different version's path and pass verification. (The previous
+  digest-membership check against a signed `checksums.txt` was tag-agnostic.)
 
 ## [2026-08-19]
 

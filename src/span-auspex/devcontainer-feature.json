@@ -1,6 +1,6 @@
 {
   "id": "span-auspex",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "name": "Span Auspex Capture",
   "documentationURL": "https://github.com/Attuned-Corp/auspex-distribution",
   "description": "Installs the auspex capture agent and runs it under the auspex-owned supervisor (no OS service manager), the posture for ephemeral dev containers and cloud agents. onCreate does a service-free, idempotent cold install (wires detected coding tools + arms the cold-start capture relax); postStart (re)launches `auspex daemon --supervise` so the worker is respawned and drained on the orchestrator's resume/stop.",
@@ -13,13 +13,18 @@
     "version": {
       "type": "string",
       "default": "",
-      "description": "Release tag substituted for the literal {{version}} token in binaryUri (e.g. v0.1.0) and recorded alongside the placed binary. Empty is fine for a non-templated binaryUri; a {{version}} template with no version fails the install (there is no mutable 'latest' alias on the download host)."
+      "description": "Release tag substituted for the literal {{version}} token in binaryUri (e.g. v0.1.0) and recorded alongside the placed binary. Empty is fine for a non-templated binaryUri; a {{version}} template with no version fails the install (there is no mutable 'latest' alias on the download host) unless 'digest' pins the bytes instead."
+    },
+    "digest": {
+      "type": "string",
+      "default": "",
+      "description": "Pin the exact artifact by content: a raw sha256 (optionally 'sha256:'-prefixed) of the binary. When set, the install fetches it straight from the version-free content-addressed blob store (<host>/blobs/sha256/<digest>, host taken from binaryUri) and self-verifies sha256(bytes)==digest — bypassing version→manifest resolution, so it survives a re-tag and needs no cosign/jq. The 'version' and 'verify' options are not consulted for a pinned digest (the digest is the trust anchor); obtain the digest out-of-band from a once-verified manifest or your org's pin. For an in-container path binaryUri, the local file is self-verified against the pin before it is copied."
     },
     "verify": {
       "type": "string",
       "enum": ["checksum", "cosign", "none"],
       "default": "cosign",
-      "description": "Integrity/provenance check for a downloaded (https) binaryUri. 'cosign' (default) keyless-verifies the version-root checksums.txt against auspex's pinned release identity and confirms the binary's digest is in it — proving authenticity, not just integrity. It needs NO pre-installed cosign (the Feature auto-provisions a pinned cosign) and makes NO Sigstore network calls (a pinned trusted_root.json is shipped); it does need egress to github.com for cosign and downloads a ~150 MB binary once per build. 'checksum' fetches the adjacent <binaryUri>.sha256 and fails on a SHA-256 mismatch or missing sidecar (integrity only). 'none' installs without verification (not recommended for a remote source). Ignored for an in-container path binaryUri (locally-present, already trusted)."
+      "description": "Integrity/provenance check for a downloaded (https) binaryUri. 'cosign' (default) resolves the cosign-signed version→digest manifest for the requested tag + os/arch, then installs the artifact by digest from the content-addressed blob store and self-verifies sha256(bytes) against the signed digest — proving authenticity and binding the tag (closing version substitution). It needs NO pre-installed cosign or jq (the Feature auto-provisions pinned ones) and makes NO Sigstore network calls (a pinned trusted_root.json is shipped); it does need egress to github.com for cosign + jq once per build. 'checksum' fetches the adjacent <binaryUri>.sha256 and fails on a SHA-256 mismatch or missing sidecar (integrity only). 'none' installs without verification (not recommended for a remote source). Ignored for an in-container path binaryUri (locally-present, already trusted)."
     },
     "auspexHome": {
       "type": "string",
