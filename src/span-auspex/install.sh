@@ -9,6 +9,7 @@ set -euo pipefail
 BINARY_URI="${BINARYURI:-}"
 VERSION="${VERSION:-}"
 VERIFY="${VERIFY:-cosign}"
+DIGEST="${DIGEST:-}" # optional pin: a raw sha256 (of the artifact) that bypasses version→manifest resolution
 FEATURE_HOME="${AUSPEXHOME:-}"
 DEVICE_ID="${DEVICEID:-}"
 TOKEN_FILE="${TOKENFILE:-}"
@@ -46,8 +47,10 @@ fi
 # download host — the layout is /releases/<tag>/… — so an empty version would resolve to a 404 path).
 case "$BINARY_URI" in
   *'{{version}}'*)
-    if [ -z "$VERSION" ]; then
-      echo "auspex feature: binaryUri uses the {{version}} token but no 'version' was set — set 'version' to a release tag (e.g. v0.1.0). There is no 'latest' alias on the download host." >&2
+    # A pinned digest addresses the version-free blob, so an empty version is fine then (the blob path is
+    # derived from the host root, before /releases/); otherwise a {{version}} template needs a concrete tag.
+    if [ -z "$VERSION" ] && [ -z "$DIGEST" ]; then
+      echo "auspex feature: binaryUri uses the {{version}} token but no 'version' (or 'digest') was set — set 'version' to a release tag (e.g. v0.1.0), or set 'digest' to pin by content. There is no 'latest' alias on the download host." >&2
       exit 1
     fi
     ;;
@@ -74,22 +77,40 @@ case "$BINARY_URI" in
         }
         ;;
     esac
-    echo "auspex feature: acquiring binary (verify: ${VERIFY}) for ${BINARY_URI}"
-    # acquire_verified fetches + verifies per tier and writes the TRUSTED bytes to the temp; only a passing
-    # (or explicitly disabled) verification returns, so a tampered/truncated artifact is never chmod +x'd
-    # into place. verify: cosign resolves the signed manifest and fetches the content-addressed BLOB (not the
-    # version-path bytes); checksum/none fetch the version path. Only on success do we promote it to BIN_DEST.
+    # Both write the TRUSTED bytes to the temp and only return on success, so a tampered/truncated artifact
+    # is never chmod +x'd into place; only a passing check promotes it to BIN_DEST.
     dl_tmp="$(mktemp)"
-    acquire_verified "$BINARY_URI" "$VERIFY" "$dl_tmp"
+    if [ -n "$DIGEST" ]; then
+      # Pin-by-digest: fetch straight from the version-free content-addressed blob (host derived from
+      # binaryUri) and self-verify. The 'version' + 'verify' options don't apply — the digest is the anchor.
+      echo "auspex feature: pinning by digest (host ${BINARY_URI%%/releases/*})"
+      acquire_by_digest "$BINARY_URI" "$DIGEST" "$dl_tmp"
+    else
+      # verify: cosign resolves the signed manifest and fetches the content-addressed BLOB (not the
+      # version-path bytes); checksum/none fetch the version path.
+      echo "auspex feature: acquiring binary (verify: ${VERIFY}) for ${BINARY_URI}"
+      acquire_verified "$BINARY_URI" "$VERIFY" "$dl_tmp"
+    fi
     mv "$dl_tmp" "$BIN_DEST"
     ;;
   *)
-    # A plain in-container path is a locally-present, already-trusted artifact — no network fetch, so the
-    # verify option does not apply (there is no sidecar to check and nothing was downloaded).
+    # A plain in-container path is a locally-present artifact — no network fetch, so the verify option does
+    # not apply. When a 'digest' is pinned we still self-verify the local bytes against it (cheap assurance a
+    # pre-staged binary matches the pin); otherwise it is treated as already-trusted and copied.
     echo "auspex feature: copying binary from path ${BINARY_URI}"
     if [ ! -f "$BINARY_URI" ]; then
       echo "auspex feature: binaryUri path '${BINARY_URI}' does not exist in the container" >&2
       exit 1
+    fi
+    if [ -n "$DIGEST" ]; then
+      _pin="${DIGEST#sha256:}"
+      _pin="$(printf '%s' "$_pin" | tr 'A-F' 'a-f')"
+      _got="$(sha256_of "$BINARY_URI")"
+      if [ "$_pin" != "$_got" ]; then
+        echo "auspex feature: pinned digest mismatch for ${BINARY_URI} (expected sha256:${_pin}, got sha256:${_got}) — refusing to install" >&2
+        exit 1
+      fi
+      echo "auspex feature: local binary matches pinned digest sha256:${_got}"
     fi
     cp "$BINARY_URI" "$BIN_DEST"
     ;;

@@ -31,6 +31,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Pin-by-digest install** (**Feature 0.5.0** + **Installers**) — a `digest`
+  option (`--digest` / `-Digest` for the bootstrap) that pins the **exact
+  artifact by content**: the install fetches it straight from the version-free
+  content-addressed blob store (`<host>/blobs/sha256/<digest>`) and self-verifies
+  `sha256(bytes)==digest`, bypassing version→manifest resolution. A digest is a
+  version-free address (the `@sha256:…`-style pin) that survives a re-tag and
+  needs no cosign/jq — the strongest supply-chain pin for a lockfile or fleet
+  baseline. `version`/`verify` are not consulted for a pinned digest, and a byte
+  mismatch, missing blob, or malformed digest fails closed. Obtain the digest via
+  the by-hand two-hop verification or your org's published pin.
 - **Installers** — a piped bootstrap installer, `curl … | sh` (bash, macOS/Linux)
   and `irm … | iex` (PowerShell, Windows), that fetches the auspex binary for the
   detected OS/arch from the release CDN, **verifies it fail-closed** (default

@@ -26,6 +26,7 @@ param(
   [string]$Verify = $(if ($env:AUSPEX_VERIFY) { $env:AUSPEX_VERIFY } else { 'cosign' }),
   [string]$BaseUrl = $env:AUSPEX_BASE_URL,   # REQUIRED unless -Url: no baked default (host-agnostic public repo)
   [string]$Url = $env:AUSPEX_BINARY_URL,
+  [string]$Digest = $env:AUSPEX_DIGEST,      # pin a raw sha256 (of the artifact) — installs the version-free blob directly
   [string]$BinDir = $env:AUSPEX_BIN_DIR,
   [string]$CosignBaseUrl = $(if ($env:AUSPEX_COSIGN_BASE_URL) { $env:AUSPEX_COSIGN_BASE_URL } else { 'https://github.com/sigstore/cosign/releases/download' })
 )
@@ -170,10 +171,31 @@ function Fetch-BlobByDigest([string]$u, [string]$digest, [string]$out) {
   Write-Host "auspex install: by-digest verified (sha256:$got)"
 }
 
-# --- derive URL ------------------------------------------------------------------------------------------
-if (-not $Url) {
+# Pin-by-digest (auspex ADR 0047 — the version-free pin): install the artifact STRAIGHT from the global
+# content-addressed blob and self-verify, bypassing the version->manifest resolution. The digest is the
+# trust anchor (obtained out-of-band), so no version/manifest/cosign is consulted — the self-verify is the
+# whole check and it survives a re-tag. <base> is the host root (blobs/sha256/<digest> is appended).
+function Acquire-ByDigest([string]$base, [string]$digest, [string]$out) {
+  $d = ($digest -replace '^sha256:', '').ToLower()
+  if ($d -notmatch '^[0-9a-f]{64}$') {
+    Fail "invalid pinned digest '$digest' — expected a 64-char sha256 hex (optionally 'sha256:'-prefixed)" 2
+  }
+  Write-Host "auspex install: pinning by digest sha256:$d (version-free; self-verify only)"
+  Fetch-BlobByDigest ($base.TrimEnd('/')) $d $out
+}
+
+# --- derive source ---------------------------------------------------------------------------------------
+$pinBase = $null
+if ($Digest) {
+  # Pin-by-digest needs only a host root (the blob is version/os/arch-free). Prefer -BaseUrl; else derive it
+  # from a full -Url (everything before /releases/). No version/os/arch derivation.
+  if ($BaseUrl)  { $pinBase = $BaseUrl.TrimEnd('/') }
+  elseif ($Url)  { $pinBase = ($Url -replace '/releases/.*$', '') }
+  else { Fail "-Digest needs a host — pass -BaseUrl <url> (or -Url to derive it), or set AUSPEX_DIGEST with AUSPEX_BASE_URL" 2 }
+}
+elseif (-not $Url) {
   if (-not $BaseUrl) { Fail "no artifact source — pass -BaseUrl <url> (your auspex distribution host; see your install instructions) or -Url <full-url>, or set AUSPEX_BASE_URL" 2 }
-  if (-not $Version) { Fail "-Version is required (there is no 'latest' alias on the download host) — e.g. -Version v0.1.0" 2 }
+  if (-not $Version) { Fail "-Version is required (there is no 'latest' alias on the download host) — e.g. -Version v0.1.0. Or pin exact bytes with -Digest." 2 }
   $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     'AMD64' { 'amd64' }
     'ARM64' { 'arm64' }
@@ -188,16 +210,23 @@ New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $binDest = Join-Path $BinDir 'auspex.exe'
 
 # --- fetch -> verify (fail-closed) -> place --------------------------------------------------------------
-# verify: cosign resolves the signed version->digest manifest and fetches the content-addressed BLOB
-# (blobs/sha256/<digest>), self-verifying it — the version-path $Url is only the resolution anchor. checksum
-# and none fetch the version-path binary directly. Only a passing check promotes the temp to $binDest.
-Write-Host "auspex install: acquiring binary (verify: $Verify) for $Url"
+# -Digest pins the version-free content-addressed blob (<base>/blobs/sha256/<digest>) and self-verifies.
+# Otherwise verify: cosign resolves the signed version->digest manifest and fetches the BLOB, self-verifying
+# it (the version-path $Url is only the resolution anchor), while checksum/none fetch the version path
+# directly. Only a passing check promotes the temp to $binDest.
 $dlTmp = New-TemporaryFile
 try {
-  switch ($Verify) {
-    'none'     { Write-Warning "auspex install: -Verify none — installing WITHOUT verification (not recommended)"; Fetch $Url $dlTmp.FullName }
-    'checksum' { Fetch $Url $dlTmp.FullName; Verify-Checksum $dlTmp.FullName $Url }
-    'cosign'   { $digest = Resolve-BinaryDigest $Url; Fetch-BlobByDigest $Url $digest $dlTmp.FullName }
+  if ($Digest) {
+    Write-Host "auspex install: pinning by digest (host $pinBase)"
+    Acquire-ByDigest $pinBase $Digest $dlTmp.FullName
+  }
+  else {
+    Write-Host "auspex install: acquiring binary (verify: $Verify) for $Url"
+    switch ($Verify) {
+      'none'     { Write-Warning "auspex install: -Verify none — installing WITHOUT verification (not recommended)"; Fetch $Url $dlTmp.FullName }
+      'checksum' { Fetch $Url $dlTmp.FullName; Verify-Checksum $dlTmp.FullName $Url }
+      'cosign'   { $digest = Resolve-BinaryDigest $Url; Fetch-BlobByDigest $Url $digest $dlTmp.FullName }
+    }
   }
   Move-Item -LiteralPath $dlTmp.FullName -Destination $binDest -Force
 } finally {

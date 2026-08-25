@@ -17,7 +17,9 @@
 # exactly like cosign). verify: checksum collapses to an integrity-only sha256 against the adjacent .sha256
 # sidecar (no cosign/jq); per-artifact .pkg/.msi carry their own .cosign.bundle (verify_cosign_bundle,
 # unchanged). The ONE raw-binary entrypoint is acquire_verified <version-url> <mode> <out> — it owns the
-# fetch so the cosign tier never pulls the version-path bytes it would then discard for the blob.
+# fetch so the cosign tier never pulls the version-path bytes it would then discard for the blob. To pin a
+# specific artifact regardless of version, acquire_by_digest <base> <digest> <out> fetches straight from the
+# content-addressed blob and self-verifies (the digest is the trust anchor; no version/manifest/cosign/jq).
 #
 # TRUST MATERIAL SSOT: the identity regex + OIDC issuer + cosign pins below are the distribution repo's
 # VERIFIER CONFIG (origin-#2 anchor). auspex is canonical for the *signing* descriptor it owns
@@ -436,6 +438,31 @@ acquire_verified() { # <version_url> <mode> <out>
       exit "$AUSPEX_VERIFY_EX_USAGE"
       ;;
   esac
+}
+
+# Pin-by-digest acquisition (auspex ADR 0047 — the version-free pin): fetch the artifact STRAIGHT from the
+# global content-addressed blob (<base>/blobs/sha256/<digest>) and self-verify, bypassing the version →
+# manifest resolution entirely. The digest IS the trust anchor — obtained out-of-band (from a
+# once-cosign-verified manifest, an org-distributed pin, or the by-hand two-hop) — so no version, manifest,
+# cosign, or jq is consulted; the by-digest self-verify (sha256(bytes) == digest) is the whole check, and it
+# is version-free (a re-tag or de-index never moves it). <base> is the CDN/bucket root; a full version URL is
+# also accepted (its root before /releases/ is used), so a caller can reuse the same source it already has.
+acquire_by_digest() { # <base_or_version_url> <digest> <out>
+  local base="$1" digest="$2" out="$3"
+  case "$digest" in sha256:*) digest="${digest#sha256:}" ;; esac
+  digest="$(printf '%s' "$digest" | tr 'A-F' 'a-f')" # normalize a pasted uppercase digest
+  case "$digest" in
+    "" | *[!0-9a-f]*)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: invalid pinned digest '${2}' — expected a 64-char sha256 hex (optionally 'sha256:'-prefixed)" >&2
+      exit "$AUSPEX_VERIFY_EX_USAGE"
+      ;;
+  esac
+  if [ "${#digest}" -ne 64 ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinned digest '${2}' is not 64 hex chars — expected a full sha256" >&2
+    exit "$AUSPEX_VERIFY_EX_USAGE"
+  fi
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinning by digest sha256:${digest} (version-free; self-verify only)"
+  fetch_blob_by_digest "$base" "$digest" "$out"
 }
 
 # Provenance check for an artifact carrying its OWN per-artifact cosign bundle (the cross-runner .pkg/.msi,
