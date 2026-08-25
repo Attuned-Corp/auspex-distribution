@@ -276,6 +276,54 @@ else
   echo "skip [cosign-pinned-hash-gate]: needs Linux without a cosign already on PATH"
 fi
 
+# ---- pin-by-digest (ADR 0047 — the version-free pin) -------------------------------------------------
+# The pin bypasses version→manifest resolution entirely: given a raw sha256, install.sh fetches the blob
+# straight from blobs/sha256/<digest> (host derived from binaryUri) and self-verifies. No cosign, no jq, no
+# manifest — so this matrix runs unconditionally. It must install the exact blob bytes on a match, and fail
+# CLOSED on a tampered blob, an absent blob, or a malformed digest.
+digest_check() { # <label> <expect ok|fail> <digest-value> <blob good|bad|absent>
+  local label="$1" expect="$2" digest="$3" blob="$4" bin_dest share_dir rc=0
+  setup_manifest_layout test "$blob" # places (or omits) blobs/sha256/${GOOD_SUM} per <blob>
+  bin_dest="$WORK/dest/auspex"
+  share_dir="$WORK/share"
+  rm -rf "$WORK/dest" "$share_dir"
+  mkdir -p "$WORK/dest"
+  env -i PATH="$PATH" \
+    BINARYURI="${BASE}/${COSIGN_RELDIR}/auspex" \
+    DIGEST="$digest" \
+    HOOKSCOPE="user" \
+    AUSPEX_BIN_DEST="$bin_dest" \
+    AUSPEX_SHARE_DIR="$share_dir" \
+    bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+  local got="ok"
+  [ "$rc" -ne 0 ] && got="fail"
+  if [ "$got" != "$expect" ]; then
+    echo "FAIL [$label]: expected install to $expect but it ${got}ed (rc=$rc)" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$expect" = "ok" ] && { [ ! -x "$bin_dest" ] || ! cmp -s "$WEBROOT/auspex" "$bin_dest"; }; then
+    echo "FAIL [$label]: install reported success but ${bin_dest} is missing/wrong" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$expect" = "fail" ] && [ -e "$bin_dest" ]; then
+    echo "FAIL [$label]: refused install still left a binary at ${bin_dest} (must fail closed)" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: install ${got} as expected"
+  pass=$((pass + 1))
+}
+
+echo "==> install.sh pin-by-digest (version-free; self-verify only)"
+digest_check "digest-pin-verifies"  ok   "$GOOD_SUM"          good   # bytes hash to the pin → install the blob
+digest_check "digest-pin-prefixed"  ok   "sha256:${GOOD_SUM}" good   # 'sha256:'-prefixed pin is accepted
+digest_check "digest-pin-tampered"  fail "$GOOD_SUM"          bad    # blob bytes ≠ pin → self-verify fails closed
+digest_check "digest-pin-absent"    fail "$GOOD_SUM"          absent # blob missing → fetch fails closed
+digest_check "digest-pin-badformat" fail "deadbeef"           good   # not a 64-char sha256 → usage error, no fetch
+
 # ---- curl|sh bootstrap (AC1/AC2/AC3) -----------------------------------------------------------------
 # The bootstrap shares the SAME verify recipe (src/span-auspex/verify-lib.sh). Drive it two ways: the
 # repo-checkout form (bootstrap/bootstrap.sh sources the lib) AND the assembled release form
@@ -340,6 +388,42 @@ if command -v jq >/dev/null 2>&1; then
 else
   echo "skip [boot cosign matrix]: jq not available to parse the fixture manifest"
 fi
+
+# curl|sh bootstrap pin-by-digest: --base-url + --digest installs the blob directly (no version/os/arch, no
+# cosign/jq) and self-verifies; --url derives the host root the same way. Fail-closed on a tampered blob.
+boot_digest_check() { # <label> <expect ok|fail> <source-arg> <blob good|bad|absent>
+  local label="$1" expect="$2" source_arg="$3" blob="$4" bootdir="$WORK/bootdest" rc=0
+  setup_manifest_layout test "$blob"
+  rm -rf "$bootdir"
+  # shellcheck disable=SC2086  # $source_arg is a deliberately word-split flag pair (e.g. --base-url URL)
+  env -i PATH="$PATH" \
+    bash "$BOOTSTRAP_SH" $source_arg --digest "$GOOD_SUM" --bin-dir "$bootdir" >"$WORK/out.log" 2>&1 || rc=$?
+  local got="ok"
+  [ "$rc" -ne 0 ] && got="fail"
+  if [ "$got" != "$expect" ]; then
+    echo "FAIL [$label]: expected $expect but ${got}ed (rc=$rc)" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$expect" = "ok" ] && { [ ! -x "$bootdir/auspex" ] || ! cmp -s "$WEBROOT/auspex" "$bootdir/auspex"; }; then
+    echo "FAIL [$label]: reported success but ${bootdir}/auspex is missing/wrong" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$expect" = "fail" ] && [ -e "$bootdir/auspex" ]; then
+    echo "FAIL [$label]: refused install still left a binary (must fail closed)" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: bootstrap ${got} as expected"
+  pass=$((pass + 1))
+}
+
+echo "==> curl|sh bootstrap pin-by-digest"
+boot_digest_check "boot-digest-base-url" ok   "--base-url ${BASE}"                         good # host via --base-url
+boot_digest_check "boot-digest-via-url"  ok   "--url ${BASE}/${COSIGN_RELDIR}/auspex"      good # host derived from --url
+boot_digest_check "boot-digest-tampered" fail "--base-url ${BASE}"                         bad  # blob ≠ pin → fail closed
 
 # ---- MDM verify-before-install gate (AC7) ------------------------------------------------------------
 # The gate reuses the SAME recipe via verify_cosign_bundle (bundle-direct over the .pkg/.msi bytes — no

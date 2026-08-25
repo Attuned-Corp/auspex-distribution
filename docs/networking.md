@@ -28,6 +28,7 @@ and fail closed on a mismatch.
 
 | Path | Trust epoch | Artifact (origin #1) | Script / anchor (origin #2) | cosign / jq CLI | Sigstore (Fulcio/Rekor/TUF) |
 |---|---|---|---|---|---|
+| **Pin-by-digest** (`digest` / `--digest`) | post-trust | CDN (`blobs/sha256/<digest>` only) | — | none — self-verify only, no manifest/cosign/jq | **never** |
 | **MDM verify-gate** (pinned cosign pre-provisioned) | post-trust | CDN | — | none — cosign baked in, no manifest parse (no jq) | **never** |
 | **Dev Container Feature** `install.sh` | first-acquisition | CDN | ghcr.io (the Feature itself) | `github.com` (cosign + jq, once/build, unless in image) | **never** |
 | **`curl\|sh` bootstrap** | first-acquisition | CDN | `github.com` / `objects.githubusercontent.com` (the installer) | `github.com` (cosign + jq, unless present/mirrored) | **never** |
@@ -41,6 +42,9 @@ so there is no Fulcio, Rekor, or TUF traffic — proven mechanically by the netw
 
 ## Minimal allow-lists
 
+- **Pin-by-digest (leanest):** the **artifact CDN only**, and only its `blobs/sha256/<digest>` path — no
+  manifest, cosign, or jq is fetched (the by-digest self-verify is the whole check). The `curl|sh` / `irm`
+  installers still come from origin #2, but the acquisition + verification touch origin #1 alone.
 - **MDM gate (best case):** the **artifact CDN only** — cosign is pre-provisioned on the runner, and
   verification is offline. Zero external egress at verify time.
 - **Feature / bootstrap (default):** the **artifact CDN** **+** `github.com` **+** `objects.githubusercontent.com`

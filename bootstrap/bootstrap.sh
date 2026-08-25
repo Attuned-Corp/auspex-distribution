@@ -37,20 +37,23 @@ VERSION="${AUSPEX_VERSION:-}"
 VERIFY="${AUSPEX_VERIFY:-cosign}"
 BIN_DIR="${AUSPEX_BIN_DIR:-}"
 BINARY_URL="${AUSPEX_BINARY_URL:-}" # full override; bypasses BASE_URL/version/os/arch derivation
+DIGEST="${AUSPEX_DIGEST:-}"         # pin a raw sha256 (of the artifact) — installs the version-free blob directly
 
 usage() {
   cat >&2 <<EOF
 auspex install — fetch, verify, and install the auspex binary.
 
-  --version <tag>     auspex release tag to install (e.g. v0.1.0). Required unless --url is given.
-  --verify <mode>     cosign (default) | checksum | none
+  --version <tag>     auspex release tag to install (e.g. v0.1.0). Required unless --url/--digest is given.
+  --verify <mode>     cosign (default) | checksum | none (ignored with --digest — self-verify is the check)
   --base-url <url>    artifact source base — REQUIRED unless --url (your auspex distribution host / mirror)
   --url <url>         full binary URL (overrides --base-url/--version/os/arch derivation)
+  --digest <sha256>   pin by content: install <base-url>/blobs/sha256/<digest> directly and self-verify
+                      (version-free — survives a re-tag; needs --base-url, or --url to derive the host)
   --bin-dir <dir>     install dir (default: /usr/local/bin if writable, else \$HOME/.local/bin)
   -h, --help          this help
 
-Env equivalents: AUSPEX_VERSION, AUSPEX_VERIFY, AUSPEX_BASE_URL, AUSPEX_BINARY_URL, AUSPEX_BIN_DIR,
-AUSPEX_COSIGN_BASE_URL (mirror the pinned cosign CLI for air-gapped installs).
+Env equivalents: AUSPEX_VERSION, AUSPEX_VERIFY, AUSPEX_BASE_URL, AUSPEX_BINARY_URL, AUSPEX_DIGEST,
+AUSPEX_BIN_DIR, AUSPEX_COSIGN_BASE_URL (mirror the pinned cosign CLI for air-gapped installs).
 EOF
 }
 
@@ -60,6 +63,7 @@ while [ "$#" -gt 0 ]; do
     --verify) VERIFY="${2:-}"; shift 2 ;;
     --base-url) BASE_URL="${2:-}"; shift 2 ;;
     --url) BINARY_URL="${2:-}"; shift 2 ;;
+    --digest) DIGEST="${2:-}"; shift 2 ;;
     --bin-dir) BIN_DIR="${2:-}"; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: unknown argument '$1'" >&2; usage; exit "$AUSPEX_VERIFY_EX_USAGE" ;;
@@ -87,14 +91,27 @@ detect_arch() {
   esac
 }
 
-if [ -z "$BINARY_URL" ]; then
+PIN_BASE="" # host root for a pin-by-digest fetch
+if [ -n "$DIGEST" ]; then
+  # Pin-by-digest needs only a host root (the blob is version/os/arch-free). Prefer --base-url; else derive
+  # it from a full --url (everything before /releases/). No version/os/arch derivation.
+  if [ -n "$BASE_URL" ]; then
+    PIN_BASE="${BASE_URL%/}"
+  elif [ -n "$BINARY_URL" ]; then
+    PIN_BASE="${BINARY_URL%%/releases/*}"
+  else
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --digest needs a host — pass --base-url <url> (or a full --url to derive it), or set AUSPEX_BASE_URL" >&2
+    usage
+    exit "$AUSPEX_VERIFY_EX_USAGE"
+  fi
+elif [ -z "$BINARY_URL" ]; then
   if [ -z "$BASE_URL" ]; then
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: no artifact source — pass --base-url <url> (your auspex distribution host; see your install instructions) or --url <full-url>, or set AUSPEX_BASE_URL" >&2
     usage
     exit "$AUSPEX_VERIFY_EX_USAGE"
   fi
   if [ -z "$VERSION" ]; then
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --version is required (there is no 'latest' alias on the download host) — e.g. --version v0.1.0" >&2
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --version is required (there is no 'latest' alias on the download host) — e.g. --version v0.1.0. Or pin exact bytes with --digest." >&2
     usage
     exit "$AUSPEX_VERIFY_EX_USAGE"
   fi
@@ -123,14 +140,18 @@ dl_tmp=""
 _boot_cleanup() { rm -f "${dl_tmp:-}" "${_AUSPEX_EMBEDDED_ROOT:-}"; }
 trap _boot_cleanup EXIT
 
-echo "${AUSPEX_VERIFY_LOG_PREFIX}: acquiring binary (verify: ${VERIFY}) for ${BINARY_URL}"
 dl_tmp="$(mktemp)"
-# acquire_verified fetches + verifies per tier and writes the TRUSTED bytes to dl_tmp (fail-closed). For
-# verify: cosign this resolves the signed version→digest manifest and fetches the content-addressed BLOB
-# (blobs/sha256/<digest>), self-verifying it — the version-path URL is only the resolution anchor; checksum
-# and none fetch the version-path binary directly. Only a passing check returns, so a tampered artifact is
-# never placed on PATH.
-acquire_verified "$BINARY_URL" "$VERIFY" "$dl_tmp"
+# Both write the TRUSTED bytes to dl_tmp and only return on success (fail-closed), so a tampered artifact is
+# never placed on PATH. --digest pins the version-free content-addressed blob (<base>/blobs/sha256/<digest>)
+# and self-verifies; otherwise verify: cosign resolves the signed version→digest manifest and fetches the
+# blob (the version URL is only the resolution anchor), while checksum/none fetch the version path directly.
+if [ -n "$DIGEST" ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinning by digest (host ${PIN_BASE})"
+  acquire_by_digest "$PIN_BASE" "$DIGEST" "$dl_tmp"
+else
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: acquiring binary (verify: ${VERIFY}) for ${BINARY_URL}"
+  acquire_verified "$BINARY_URL" "$VERIFY" "$dl_tmp"
+fi
 
 chmod 0755 "$dl_tmp"
 mv "$dl_tmp" "$BIN_DEST"
