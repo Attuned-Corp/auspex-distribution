@@ -7,7 +7,7 @@
   embedded Sigstore trusted_root.json) is INJECTED from src/span-auspex/verify-lib.sh by bootstrap/assemble.sh
   — verify-lib.sh stays the single source of truth (SSOT) for the pins; this file is not runnable until
   assembled into dist/auspex-install.ps1. PowerShell cannot share the bash verify recipe, so this is the
-  Windows-native equivalent of verify_cosign / verify_sha256 (cross-language duplication is unavoidable;
+  Windows-native equivalent of the bash recipe's resolve_binary_digest / fetch_blob_by_digest / verify_sha256 (cross-language duplication is unavoidable;
   the reconcile guard checks verify-lib.sh, the SSOT the assembler injects from).
 
   Served from this repo's GitHub Releases (origin #2); the artifact comes from the CDN (origin #1). The
@@ -100,33 +100,74 @@ function Write-TrustedRoot {
   return $path
 }
 
-function Verify-Cosign([string]$file, [string]$u) {
+# Resolve the raw-binary digest for a version-path URL from the SIGNED manifest (verify: cosign — auspex
+# ADR 0047), the Windows-native equivalent of verify-lib.sh's resolve_binary_digest. Fetch + cosign-verify
+# the version→digest index (manifest.json), assert its version annotation matches the requested tag (closes
+# the version-substitution gap), then read the unique application/octet-stream descriptor for this os/arch
+# and return its bare-hex sha256. PowerShell parses the manifest with native ConvertFrom-Json — no jq.
+function Resolve-BinaryDigest([string]$u) {
   Ensure-Cosign
   $rootPath = Write-TrustedRoot
-  # version root = dirname^3 of .../releases/<v>/<os>/<arch>/auspex.exe
+  # version root = dirname^3 of .../releases/<v>/<os>/<arch>/auspex.exe; os/arch/version from the path.
   $verRoot = ($u -replace '/[^/]+/[^/]+/[^/]+$', '')
-  $checks = New-TemporaryFile
+  $version = ($verRoot -split '/')[-1]
+  $parts = $u -split '/'
+  $arch = $parts[$parts.Length - 2]
+  $os = $parts[$parts.Length - 3]
+  $manifest = New-TemporaryFile
   $bundle = New-TemporaryFile
-  Fetch "$verRoot/checksums.txt" $checks.FullName
-  Fetch "$verRoot/checksums.txt.cosign.bundle" $bundle.FullName
-  & $script:CosignBin verify-blob `
-    --bundle $bundle.FullName `
-    --trusted-root $rootPath `
-    --certificate-identity-regexp $CosignIdentityRe `
-    --certificate-oidc-issuer $CosignOidcIssuer `
-    $checks.FullName *> $null
-  $rc = $LASTEXITCODE
-  if ($rc -ne 0) {
-    Remove-Item -LiteralPath $checks.FullName, $bundle.FullName, $rootPath -Force
-    Fail "cosign FAILED to verify $verRoot/checksums.txt against the pinned release identity — refusing to install" 13
+  try {
+    Fetch "$verRoot/manifest.json" $manifest.FullName
+    Fetch "$verRoot/manifest.json.cosign.bundle" $bundle.FullName
+    & $script:CosignBin verify-blob `
+      --bundle $bundle.FullName `
+      --trusted-root $rootPath `
+      --certificate-identity-regexp $CosignIdentityRe `
+      --certificate-oidc-issuer $CosignOidcIssuer `
+      $manifest.FullName *> $null
+    if ($LASTEXITCODE -ne 0) {
+      Fail "cosign FAILED to verify $verRoot/manifest.json against the pinned release identity — refusing to install" 13
+    }
+    try {
+      $json = Get-Content -Raw -LiteralPath $manifest.FullName | ConvertFrom-Json
+      $mver = $json.annotations.'org.opencontainers.image.version'
+      $descs = @($json.manifests | Where-Object {
+          $_.mediaType -eq 'application/octet-stream' -and $_.platform.os -eq $os -and $_.platform.architecture -eq $arch
+        })
+    } catch {
+      Fail "could not parse the signed manifest $verRoot/manifest.json — refusing to install" 14
+    }
+    if ($mver -ne $version) {
+      Fail "the signed manifest is for '$mver' but the requested path is version '$version' — refusing (version substitution)" 14
+    }
+    if ($descs.Count -ne 1) {
+      Fail "the signed manifest has no unique raw-binary (application/octet-stream) descriptor for $os/$arch — refusing to install" 14
+    }
+    $digest = $descs[0].digest
+    if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
+      Fail "the resolved digest '$digest' is not a bare sha256 hex — refusing to install" 14
+    }
+    Write-Host "auspex install: resolved $version $os/$arch -> $digest (signed manifest verified)"
+    return ($digest -replace '^sha256:', '')
+  } finally {
+    Remove-Item -LiteralPath $manifest.FullName, $bundle.FullName, $rootPath -Force -ErrorAction SilentlyContinue
   }
-  $got = Get-Sha256Hex $file
-  $present = Select-String -LiteralPath $checks.FullName -SimpleMatch -Pattern $got -Quiet
-  Remove-Item -LiteralPath $checks.FullName, $bundle.FullName, $rootPath -Force
-  if (-not $present) {
-    Fail "the binary's digest $got is not present in the cosign-verified checksums.txt — refusing to install" 14
+}
+
+# Fetch an artifact from the global content-addressed blob namespace and SELF-VERIFY (verify: cosign — auspex
+# ADR 0047): the blob lives at <base>/blobs/sha256/<digest> where <base> is everything before /releases/ in
+# the version URL. sha256(bytes) must equal the digest we asked for, sealing the chain from the signed
+# manifest to the installed bytes; a mismatch is a corrupt/tampered blob and fails closed.
+function Fetch-BlobByDigest([string]$u, [string]$digest, [string]$out) {
+  $base = ($u -replace '/releases/.*$', '')
+  $blobUrl = "$base/blobs/sha256/$digest"
+  Fetch $blobUrl $out
+  $got = Get-Sha256Hex $out
+  if ($got -ne $digest) {
+    Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+    Fail "by-digest self-verify FAILED — $blobUrl hashes to $got, not $digest (corrupt or tampered blob) — refusing to install" 12
   }
-  Write-Host "auspex install: cosign-verified (checksums.txt signed by the release workflow; binary digest present)"
+  Write-Host "auspex install: by-digest verified (sha256:$got)"
 }
 
 # --- derive URL ------------------------------------------------------------------------------------------
@@ -147,14 +188,16 @@ New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $binDest = Join-Path $BinDir 'auspex.exe'
 
 # --- fetch -> verify (fail-closed) -> place --------------------------------------------------------------
-Write-Host "auspex install: downloading $Url"
+# verify: cosign resolves the signed version->digest manifest and fetches the content-addressed BLOB
+# (blobs/sha256/<digest>), self-verifying it — the version-path $Url is only the resolution anchor. checksum
+# and none fetch the version-path binary directly. Only a passing check promotes the temp to $binDest.
+Write-Host "auspex install: acquiring binary (verify: $Verify) for $Url"
 $dlTmp = New-TemporaryFile
 try {
-  Fetch $Url $dlTmp.FullName
   switch ($Verify) {
-    'none'     { Write-Warning "auspex install: -Verify none — installing WITHOUT verification (not recommended)" }
-    'checksum' { Verify-Checksum $dlTmp.FullName $Url }
-    'cosign'   { Verify-Checksum $dlTmp.FullName $Url; Verify-Cosign $dlTmp.FullName $Url }
+    'none'     { Write-Warning "auspex install: -Verify none — installing WITHOUT verification (not recommended)"; Fetch $Url $dlTmp.FullName }
+    'checksum' { Fetch $Url $dlTmp.FullName; Verify-Checksum $dlTmp.FullName $Url }
+    'cosign'   { $digest = Resolve-BinaryDigest $Url; Fetch-BlobByDigest $Url $digest $dlTmp.FullName }
   }
   Move-Item -LiteralPath $dlTmp.FullName -Destination $binDest -Force
 } finally {

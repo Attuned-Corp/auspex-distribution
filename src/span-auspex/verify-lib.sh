@@ -4,12 +4,20 @@
 # bootstrap (assembled into the released installer, see bootstrap/), and the MDM verify-before-install
 # gate (mdm/). It is a LIBRARY: sourcing it defines constants + functions and runs nothing.
 #
-# What it proves (verify: cosign, the default): the raw artifact's digest lives in the version-root
-# checksums.txt, and THAT file is cosign keyless-signed by the auspex release workflow (auspex ADR 0033
-# §4/§5). So we keyless-verify checksums.txt against the pinned release identity + a pinned Sigstore
-# trusted_root.json (FULLY LOCAL — cosign v3 checks the new-format bundle's embedded Rekor inclusion proof
-# against the shipped keys; no TUF/Rekor/Fulcio network), then confirm the artifact's digest is a line in
-# that now-trusted file. Per-artifact .pkg/.msi carry their own .cosign.bundle (verify_cosign_bundle).
+# What it proves (verify: cosign, the default — resolve → fetch-by-digest → verify, auspex ADR 0047): the
+# release publishes a cosign keyless-signed `version→digest` index (manifest.json, an OCI image-index) at
+# the version root, binding <tag> + per-os/arch → the artifact's sha256 (auspex ADR 0033 §4/§5). We
+# keyless-verify that manifest against the pinned release identity + a pinned Sigstore trusted_root.json
+# (FULLY LOCAL — cosign v3 checks the new-format bundle's embedded Rekor inclusion proof against the shipped
+# keys; no TUF/Rekor/Fulcio network), ASSERT its version annotation matches the requested tag (closing the
+# version-substitution gap a bare digest-membership check leaves open), read the raw-binary digest for this
+# os/arch, then FETCH THE BYTES from the global content-addressed blob (blobs/sha256/<digest>) and
+# self-verify (sha256(bytes) == the signed digest). Authenticity roots in the signed manifest; the bytes
+# come from the version-free, self-verifying blob. Parsing the manifest needs jq (auto-provisioned + pinned,
+# exactly like cosign). verify: checksum collapses to an integrity-only sha256 against the adjacent .sha256
+# sidecar (no cosign/jq); per-artifact .pkg/.msi carry their own .cosign.bundle (verify_cosign_bundle,
+# unchanged). The ONE raw-binary entrypoint is acquire_verified <version-url> <mode> <out> — it owns the
+# fetch so the cosign tier never pulls the version-path bytes it would then discard for the blob.
 #
 # TRUST MATERIAL SSOT: the identity regex + OIDC issuer + cosign pins below are the distribution repo's
 # VERIFIER CONFIG (origin-#2 anchor). auspex is canonical for the *signing* descriptor it owns
@@ -35,11 +43,14 @@ _AUSPEX_VERIFY_LIB_SOURCED=1
 # Documented exit codes (AC2) — the MDM gate + tests key on these to distinguish failure classes.
 AUSPEX_VERIFY_EX_USAGE=2            # bad arguments / unsupported option
 AUSPEX_VERIFY_EX_ENV=16            # environment can't verify (no sha256 tool, unsupported os/arch, missing trust root)
-AUSPEX_VERIFY_EX_FETCH=11         # required material could not be fetched (sidecar / checksums.txt / bundle)
+AUSPEX_VERIFY_EX_FETCH=11         # required material could not be fetched (manifest / by-digest blob / sidecar / bundle)
 AUSPEX_VERIFY_EX_CHECKSUM=12      # SHA-256 mismatch against the .sha256 sidecar
 AUSPEX_VERIFY_EX_COSIGN=13        # cosign verify-blob failed (bad signature OR identity/issuer mismatch)
-AUSPEX_VERIFY_EX_DIGEST_ABSENT=14 # cosign verified checksums.txt, but the artifact's digest is not in it
+AUSPEX_VERIFY_EX_DIGEST_ABSENT=14 # signed manifest doesn't bind this version/os-arch to a digest (or the
+                                  # manifest's version annotation doesn't match the requested tag)
 AUSPEX_VERIFY_EX_COSIGN_PROVISION=15 # pinned cosign could not be provisioned (download / hash mismatch)
+AUSPEX_VERIFY_EX_JQ_PROVISION=17  # pinned jq could not be provisioned (download / hash mismatch) — needed
+                                  # only by the cosign tier to parse the signed manifest
 
 # Pinned keyless-signing identity for the auspex release workflow — the binary SIGNER lives in the private
 # Attuned-Corp/auspex repo, so this stays in LOCK-STEP with that repo's signing descriptor
@@ -64,6 +75,20 @@ COSIGN_SHA256_darwin_arm64='dec1c3f802320b19c2fbcf2dc7bcfb3f258e1c181a046c23a1a0
 # version + this digest independently; kept here as the SSOT the reconcile guard checks against both.
 COSIGN_SHA256_windows_amd64='fe4d621d7ae5e900ee62089837c00f996ae9acb82027d573d1d157b6ee875cb2'
 COSIGN_BASE_URL="${AUSPEX_COSIGN_BASE_URL:-https://github.com/sigstore/cosign/releases/download}"
+
+# Self-provisioned jq (verify: cosign only): parsing the signed manifest (an OCI image-index JSON) needs a
+# JSON reader, and we refuse to shell-parse security-critical JSON by hand. Mirroring the cosign approach,
+# when jq is not on PATH we download a PINNED release binary and verify it against a hardcoded per-os/arch
+# SHA-256 BEFORE using it (fail closed) — the pinned hash is the trust anchor, shipped inside this already-
+# trusted file. jq is a small static binary. Note jq's asset OS token is `macos` (not `darwin`); ensure_jq
+# maps it. Windows never needs this — the PowerShell installer parses the manifest with native
+# ConvertFrom-Json. Refresh the version + all four SHAs together (README "Updating the pinned cosign / jq").
+JQ_VERSION='jq-1.8.2'
+JQ_SHA256_linux_amd64='b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f'
+JQ_SHA256_linux_arm64='8b85c817833814ddca00a144c33705546355afccf0cf39b188f3cdb48b852309'
+JQ_SHA256_macos_amd64='e94b266e3c26690550006abe63152b782280f4e14374accdf04cbde844f00bc0'
+JQ_SHA256_macos_arm64='2d75340ba57a4b4b4c8708a21c2dc8e958a48aaa8bba13b27f77f6e4c0eca07e'
+JQ_BASE_URL="${AUSPEX_JQ_BASE_URL:-https://github.com/jqlang/jq/releases/download}"
 
 # Pinned Sigstore trust root, shipped beside this library (or handed in via AUSPEX_TRUSTED_ROOT for an
 # assembled/embedded bootstrap). cosign v3 verifies the new-format bundle's embedded Rekor inclusion proof
@@ -211,6 +236,60 @@ ensure_cosign() {
   COSIGN_CLEANUP="$tmp"
 }
 
+# Provision a jq CLI for the cosign tier's manifest parse. Prefer one already on PATH; otherwise download
+# the PINNED release binary and verify it against the hardcoded per-os/arch SHA-256 BEFORE using it (fail
+# closed). Sets JQ_BIN (and JQ_CLEANUP for a downloaded one). jq is a static binary, so the downloaded one
+# works on glibc and musl/Alpine alike. Only the cosign tier calls this — checksum/none never parse JSON.
+JQ_BIN=""
+JQ_CLEANUP=""
+ensure_jq() {
+  if command -v jq >/dev/null 2>&1; then
+    JQ_BIN="jq"
+    return 0
+  fi
+  local os arch expected
+  case "$(uname -s | tr '[:upper:]' '[:lower:]')" in
+    linux) os="linux" ;;
+    darwin) os="macos" ;; # jq's release asset uses `macos`, not `darwin`
+    *)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: parsing the signed manifest needs jq; auto-provisioning covers Linux/macOS. On '$(uname -s)' install jq yourself (it will be used) or use the 'checksum' tier" >&2
+      exit "$AUSPEX_VERIFY_EX_ENV"
+      ;;
+  esac
+  case "$(uname -m)" in
+    x86_64 | amd64) arch="amd64" ;;
+    aarch64 | arm64) arch="arm64" ;;
+    *)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: no pinned jq for CPU '$(uname -m)' — pre-install jq on PATH, or use the 'checksum' tier" >&2
+      exit "$AUSPEX_VERIFY_EX_ENV"
+      ;;
+  esac
+  local pinvar="JQ_SHA256_${os}_${arch}"
+  expected="${!pinvar:-}"
+  if [ -z "$expected" ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: no pinned jq digest for ${os}/${arch} — pre-install jq on PATH, or use the 'checksum' tier" >&2
+    exit "$AUSPEX_VERIFY_EX_ENV"
+  fi
+  local url tmp got
+  url="${JQ_BASE_URL}/${JQ_VERSION}/jq-${os}-${arch}"
+  tmp="$(mktemp)"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: provisioning pinned jq ${JQ_VERSION} (${os}/${arch})"
+  if ! fetch "$url" "$tmp"; then
+    rm -f "$tmp"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: failed to download jq ${JQ_VERSION} from ${url} — the cosign tier parses the signed manifest with jq (needs egress to github.com); pre-install jq or use the 'checksum' tier" >&2
+    exit "$AUSPEX_VERIFY_EX_JQ_PROVISION"
+  fi
+  got="$(sha256_of "$tmp")"
+  if [ "$got" != "$expected" ]; then
+    rm -f "$tmp"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinned jq SHA-256 mismatch (expected ${expected}, got ${got}) — refusing to use a tampered jq" >&2
+    exit "$AUSPEX_VERIFY_EX_JQ_PROVISION"
+  fi
+  chmod 0755 "$tmp"
+  JQ_BIN="$tmp"
+  JQ_CLEANUP="$tmp"
+}
+
 # Assert the pinned trust root is present before any cosign verify (fail closed on an incomplete checkout /
 # assembled bootstrap missing its embedded root).
 _require_trusted_root() {
@@ -220,21 +299,30 @@ _require_trusted_root() {
   fi
 }
 
-# Provenance check for a checksums.txt-covered artifact (verify: cosign — the DEFAULT for the raw binary):
-# derive the version root from the path-encoded URL (.../releases/<v>/<os>/<arch>/auspex → strip
-# <os>/<arch>/<binary>), keyless-verify checksums.txt against the pinned identity + trusted_root.json, then
-# confirm the artifact's digest is a line in that now-trusted file. A digest-membership check is
-# version/arch-agnostic and survives verify running before the binary is renamed.
-verify_cosign() { # <file> <url>
-  local file="$1" url="$2" root checks bundle got
+# Resolve the raw-binary digest for a version-path URL from the SIGNED manifest (verify: cosign — auspex
+# ADR 0047). From .../releases/<v>/<os>/<arch>/auspex[.exe] we derive the version root, tag, os and arch;
+# fetch + keyless-verify the version→digest index (manifest.json) against the pinned identity +
+# trusted_root.json; ASSERT its version annotation equals the requested tag (this is what closes the
+# version-substitution gap — the manifest is cryptographically bound to <v>, not merely to "some semver
+# tag"); then read the unique application/octet-stream descriptor for this os/arch and emit its bare-hex
+# sha256. Sets RESOLVED_DIGEST (a global, so no command-substitution captures the progress echoes). Parsing
+# uses jq (auto-provisioned + pinned); the descriptor lookup requires EXACTLY ONE match and a 64-hex digest,
+# else it fails closed (an ambiguous or absent binding must never resolve).
+RESOLVED_DIGEST=""
+resolve_binary_digest() { # <version_url>
+  local url="$1" ver_root version os arch manifest bundle m_version digest
   ensure_cosign
+  ensure_jq
   _require_trusted_root
-  root="$(dirname "$(dirname "$(dirname "$url")")")"
-  checks="$(mktemp)"
+  ver_root="$(dirname "$(dirname "$(dirname "$url")")")" # .../releases/<v>
+  version="$(basename "$ver_root")"
+  arch="$(basename "$(dirname "$url")")"
+  os="$(basename "$(dirname "$(dirname "$url")")")"
+  manifest="$(mktemp)"
   bundle="$(mktemp)"
-  if ! fetch "${root}/checksums.txt" "$checks" || ! fetch "${root}/checksums.txt.cosign.bundle" "$bundle"; then
-    rm -f "$checks" "$bundle"
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: could not fetch ${root}/checksums.txt(.cosign.bundle) — is this a signed release published under the ADR 0045 layout?" >&2
+  if ! fetch "${ver_root}/manifest.json" "$manifest" || ! fetch "${ver_root}/manifest.json.cosign.bundle" "$bundle"; then
+    rm -f "$manifest" "$bundle"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: could not fetch ${ver_root}/manifest.json(.cosign.bundle) — is this a signed release published under the ADR 0047 layout?" >&2
     exit "$AUSPEX_VERIFY_EX_FETCH"
   fi
   if ! "$COSIGN_BIN" verify-blob \
@@ -242,25 +330,117 @@ verify_cosign() { # <file> <url>
     --trusted-root "$TRUSTED_ROOT" \
     --certificate-identity-regexp "$COSIGN_IDENTITY_RE" \
     --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
-    "$checks" >/dev/null 2>&1; then
-    rm -f "$checks" "$bundle"
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: cosign FAILED to verify ${root}/checksums.txt against the pinned release identity — refusing to install" >&2
+    "$manifest" >/dev/null 2>&1; then
+    rm -f "$manifest" "$bundle"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: cosign FAILED to verify ${ver_root}/manifest.json against the pinned release identity — refusing to install" >&2
     exit "$AUSPEX_VERIFY_EX_COSIGN"
   fi
-  got="$(sha256_of "$file")"
-  if ! grep -q -- "$got" "$checks"; then
-    rm -f "$checks" "$bundle"
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: the artifact's digest ${got} is not present in the cosign-verified checksums.txt — refusing to install" >&2
+  m_version="$("$JQ_BIN" -r '.annotations["org.opencontainers.image.version"] // empty' "$manifest" 2>/dev/null)"
+  if [ "$m_version" != "$version" ]; then
+    rm -f "$manifest" "$bundle"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: the signed manifest is for '${m_version:-<none>}' but the requested path is version '${version}' — refusing (version substitution)" >&2
     exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
   fi
-  rm -f "$checks" "$bundle"
+  # The RAW BINARY is the sole application/octet-stream descriptor for a platform (archives/packages carry
+  # their own media types), so (octet-stream + os + arch) is a unique key. Require exactly one match.
+  # shellcheck disable=SC2016  # $os/$arch are jq --arg variables, deliberately single-quoted (not shell)
+  digest="$("$JQ_BIN" -r --arg os "$os" --arg arch "$arch" '
+    [ .manifests[]
+      | select(.mediaType == "application/octet-stream"
+        and .platform.os == $os
+        and .platform.architecture == $arch) ]
+    | if length == 1 then .[0].digest else empty end' "$manifest" 2>/dev/null)"
+  rm -f "$manifest" "$bundle"
   [ -n "$COSIGN_CLEANUP" ] && rm -f "$COSIGN_CLEANUP"
-  echo "${AUSPEX_VERIFY_LOG_PREFIX}: cosign-verified (checksums.txt signed by the release workflow; artifact digest present)"
+  [ -n "$JQ_CLEANUP" ] && rm -f "$JQ_CLEANUP"
+  case "$digest" in
+    sha256:*) digest="${digest#sha256:}" ;;
+    *)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the signed manifest has no unique raw-binary (application/octet-stream) descriptor for ${os}/${arch} — refusing to install" >&2
+      exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+      ;;
+  esac
+  case "$digest" in
+    *[!0-9a-f]* | "")
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the resolved digest '${digest}' is not a bare sha256 hex — refusing to install" >&2
+      exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+      ;;
+  esac
+  if [ "${#digest}" -ne 64 ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: the resolved digest '${digest}' is not 64 hex chars — refusing to install" >&2
+    exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+  fi
+  RESOLVED_DIGEST="$digest"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved ${version} ${os}/${arch} → sha256:${digest} (signed manifest verified)"
+}
+
+# Fetch an artifact from the global content-addressed blob namespace and SELF-VERIFY (verify: cosign — auspex
+# ADR 0047). The blob lives at <base>/blobs/sha256/<digest> where <base> is everything before /releases/ in
+# the version URL (the CDN/bucket root, or an internal-mirror prefix) — so the by-digest fetch tracks the
+# same host as the version path. Self-verify asserts sha256(bytes) == the digest we asked for: for a
+# resolved digest this seals the chain from the signed manifest to the installed bytes; for a directly-pinned
+# digest (Chunk E) it IS the whole check (the key is the trust anchor). A mismatch means a corrupt/tampered
+# blob — fail closed and remove the download.
+fetch_blob_by_digest() { # <version_url_or_base> <digest> <out>
+  local url="$1" digest="$2" out="$3" base blob_url got
+  base="${url%%/releases/*}"
+  if [ "$base" = "$url" ]; then base="${url%/}"; fi # already a base (no /releases/ segment)
+  blob_url="${base}/blobs/sha256/${digest}"
+  if ! fetch "$blob_url" "$out"; then
+    rm -f "$out"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: could not fetch the content-addressed blob ${blob_url} — refusing to install" >&2
+    exit "$AUSPEX_VERIFY_EX_FETCH"
+  fi
+  got="$(sha256_of "$out")"
+  if [ "$got" != "$digest" ]; then
+    rm -f "$out"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: by-digest self-verify FAILED — ${blob_url} hashes to ${got}, not ${digest} (corrupt or tampered blob) — refusing to install" >&2
+    exit "$AUSPEX_VERIFY_EX_CHECKSUM"
+  fi
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: by-digest verified (sha256:${got})"
+}
+
+# The ONE raw-binary acquisition entrypoint shared by install.sh and the curl|sh bootstrap: fetch + verify
+# per tier and write the TRUSTED bytes to <out> (fail-closed — the verify_* helpers exit non-zero on any
+# failure, so a caller only ever promotes <out> to PATH on success). Owning the fetch here is deliberate:
+# the cosign tier must NOT pull the version-path bytes and then discard them for the blob, so only
+# checksum/none touch the version path; cosign resolves the digest then fetches the content-addressed blob.
+#   cosign   — resolve version+os/arch → digest from the signed manifest, fetch the blob by digest, self-verify
+#   checksum — fetch the version-path binary + its .sha256 sidecar; integrity only (no cosign/jq/manifest)
+#   none     — fetch the version-path binary with NO verification (explicit opt-out)
+acquire_verified() { # <version_url> <mode> <out>
+  local url="$1" mode="$2" out="$3"
+  case "$mode" in
+    none)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: verify: none — installing WITHOUT integrity verification (not recommended for a remote source)" >&2
+      if ! fetch "$url" "$out"; then
+        rm -f "$out"
+        echo "${AUSPEX_VERIFY_LOG_PREFIX}: failed to download ${url}" >&2
+        exit "$AUSPEX_VERIFY_EX_FETCH"
+      fi
+      ;;
+    checksum)
+      if ! fetch "$url" "$out"; then
+        rm -f "$out"
+        echo "${AUSPEX_VERIFY_LOG_PREFIX}: failed to download ${url}" >&2
+        exit "$AUSPEX_VERIFY_EX_FETCH"
+      fi
+      verify_sha256 "$out" "$url"
+      ;;
+    cosign)
+      resolve_binary_digest "$url" # sets RESOLVED_DIGEST
+      fetch_blob_by_digest "$url" "$RESOLVED_DIGEST" "$out"
+      ;;
+    *)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: unknown verify mode '${mode}' — expected cosign|checksum|none" >&2
+      exit "$AUSPEX_VERIFY_EX_USAGE"
+      ;;
+  esac
 }
 
 # Provenance check for an artifact carrying its OWN per-artifact cosign bundle (the cross-runner .pkg/.msi,
 # auspex ADR 0033 §9): the bundle is <artifact>.cosign.bundle beside it (or supplied via a URL/path). Unlike
-# verify_cosign there is no checksums.txt indirection — the signature is directly over the artifact bytes.
+# the raw-binary cosign path there is no manifest resolve — the signature is directly over the artifact bytes.
 # <file> is the local artifact; <bundle_src> is the .cosign.bundle URL (fetched) or a local path.
 verify_cosign_bundle() { # <file> <bundle_src>
   local file="$1" bundle_src="$2" bundle tmp_bundle=""

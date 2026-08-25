@@ -123,22 +123,14 @@ dl_tmp=""
 _boot_cleanup() { rm -f "${dl_tmp:-}" "${_AUSPEX_EMBEDDED_ROOT:-}"; }
 trap _boot_cleanup EXIT
 
-echo "${AUSPEX_VERIFY_LOG_PREFIX}: downloading ${BINARY_URL}"
+echo "${AUSPEX_VERIFY_LOG_PREFIX}: acquiring binary (verify: ${VERIFY}) for ${BINARY_URL}"
 dl_tmp="$(mktemp)"
-fetch "$BINARY_URL" "$dl_tmp"
-
-case "$VERIFY" in
-  none)
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --verify none — installing WITHOUT verification (not recommended)" >&2
-    ;;
-  checksum)
-    verify_sha256 "$dl_tmp" "$BINARY_URL"
-    ;;
-  cosign)
-    verify_sha256 "$dl_tmp" "$BINARY_URL"
-    verify_cosign "$dl_tmp" "$BINARY_URL"
-    ;;
-esac
+# acquire_verified fetches + verifies per tier and writes the TRUSTED bytes to dl_tmp (fail-closed). For
+# verify: cosign this resolves the signed version→digest manifest and fetches the content-addressed BLOB
+# (blobs/sha256/<digest>), self-verifying it — the version-path URL is only the resolution anchor; checksum
+# and none fetch the version-path binary directly. Only a passing check returns, so a tampered artifact is
+# never placed on PATH.
+acquire_verified "$BINARY_URL" "$VERIFY" "$dl_tmp"
 
 chmod 0755 "$dl_tmp"
 mv "$dl_tmp" "$BIN_DEST"

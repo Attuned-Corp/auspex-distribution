@@ -89,9 +89,10 @@ below). A copy-paste starting point lives in [`examples/devcontainer.json`](./ex
     // @sha256:… digest you verified once with cosign (see "Publishing / consuming the Feature").
     "ghcr.io/attuned-corp/auspex-distribution/span-auspex:0": {
       // Raw per-os/arch binary on your download host. {{version}} is substituted from the `version`
-      // option below; swap amd64 → arm64 for an arm container. The default verify: cosign keyless-verifies
-      // the signed checksums.txt against auspex's release identity (auto-provisions cosign; no Sigstore
-      // network) — it needs egress to github.com. Use verify: checksum for a no-egress SHA-256-only check.
+      // option below; swap amd64 → arm64 for an arm container. The default verify: cosign resolves the
+      // cosign-signed version→digest manifest and installs the artifact BY DIGEST from the content-addressed
+      // blob store (auto-provisions cosign + jq; no Sigstore network) — it needs egress to github.com. Use
+      // verify: checksum for a no-egress SHA-256-only check against the .sha256 sidecar.
       "binaryUri": "https://<your-auspex-download-host>/releases/{{version}}/linux/amd64/auspex",
       "version": "v0.1.0"
     }
@@ -121,7 +122,7 @@ below). A copy-paste starting point lives in [`examples/devcontainer.json`](./ex
 |--------|---------|---------|
 | `binaryUri` | `""` (required) | Where to get the binary. An `http(s)://` URL is downloaded (and verified — see `verify`); any other value is a path already present in the container and is copied. `{{version}}` in the URL is replaced with `version`. Your download host serves the raw binary at `https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe]`. |
 | `version` | `""` | Release tag substituted into the `binaryUri` template (e.g. `v0.1.0`) and recorded alongside the binary. Empty is fine for a non-templated `binaryUri`; a `{{version}}` template with no `version` **fails the install** (there is no `latest` alias on the download host). |
-| `verify` | `cosign` | Integrity/provenance check for a **downloaded** `binaryUri`. `cosign` (default) keyless-verifies the version-root `checksums.txt` against auspex's pinned release identity and confirms the binary's digest is in it — **authenticity**, not just integrity. It needs **no** pre-installed cosign (the Feature auto-provisions a pinned one) and makes **no** Sigstore network calls (a pinned `trusted_root.json` ships in the Feature); it does need egress to `github.com` and downloads a ~150 MB cosign once per build. `checksum` fetches the adjacent `<binaryUri>.sha256` and fails on a SHA-256 mismatch or a missing sidecar (integrity only, no egress beyond the download host). `none` skips verification. Ignored for an in-container path `binaryUri`. See [Verifying the download](#verifying-the-download). |
+| `verify` | `cosign` | Integrity/provenance check for a **downloaded** `binaryUri`. `cosign` (default) resolves the cosign-signed version→digest manifest for the requested tag + os/arch, then installs the artifact **by digest** from the content-addressed blob store and self-verifies (`sha256(bytes)` == the signed digest) — **authenticity**, and it closes the version-substitution gap by binding the tag into the signed index. It needs **no** pre-installed cosign or jq (the Feature auto-provisions pinned ones) and makes **no** Sigstore network calls (a pinned `trusted_root.json` ships in the Feature); it does need egress to `github.com` (a ~150 MB cosign + a small jq, once per build). `checksum` fetches the adjacent `<binaryUri>.sha256` and fails on a SHA-256 mismatch or a missing sidecar (integrity only, no egress beyond the download host). `none` skips verification. Ignored for an in-container path `binaryUri`. See [Verifying the download](#verifying-the-download). |
 | `auspexHome` | `""` | `AUSPEX_HOME` for the binary, config, and runspace. Empty uses the daemon default (`~/.auspex`). A non-default value is **published container-wide** by the feature (see [Custom home](#custom-home)) so coding-tool hooks resolve the same home as the daemon — no manual `containerEnv` override needed. |
 | `tokenFile` | `""` | **Path** to a platform-mounted file holding the org token (not the token itself). The more secure enrollment path — see [Enrolling with Span](#enrolling-with-span). |
 | `deviceId` | `""` | Pins `AUSPEX_DEVICE_ID`. **Leave empty in almost all cases** — see [Device identity](#device-identity). There is deliberately **no `token` option** for the secret value itself (a secret doesn't belong in committed config). |
@@ -138,9 +139,11 @@ the install fails fast with guidance rather than guessing a source.
 is provided at onboarding — shown here as `<your-auspex-download-host>`) under a stable, guessable layout:
 
 ```
-https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe]        # raw binary (this feature)
-https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe].sha256 # its checksum sidecar
-https://<your-auspex-download-host>/releases/<version>/checksums.txt                   # + .cosign.bundle (signed)
+https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe]        # raw binary (one-hop human path)
+https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe].sha256 # its checksum sidecar (verify: checksum)
+https://<your-auspex-download-host>/releases/<version>/manifest.json                   # + .cosign.bundle — signed version→digest index (verify: cosign)
+https://<your-auspex-download-host>/releases/<version>/checksums.txt                   # + .cosign.bundle (signed digest list)
+https://<your-auspex-download-host>/blobs/sha256/<digest>                              # content-addressed artifact bytes (verify: cosign installs here)
 ```
 
 So a devcontainer pins a release with `version` + a templated `binaryUri` (see [Usage](#usage)):
@@ -152,14 +155,18 @@ A downloaded binary is verified **before** it is placed on PATH; a failed check 
 closed) rather than running unverified bytes. `binaryUri` must be **https** (an `http://` URL is refused —
 no cleartext fetch of the agent). The `verify` option selects the check:
 
-- **`cosign` (default).** Proves *authenticity*, not just integrity: the raw binary's digest lives in the
-  version-root `checksums.txt`, which the auspex release workflow **keyless-signs** (Sigstore; auspex ADR 0033
-  §4/§5). The Feature keyless-verifies that file against auspex's pinned release identity, then confirms the
-  binary's digest is in it. It is **self-contained**: it **auto-provisions** a pinned cosign (verified
-  against a hardcoded SHA-256) when none is on PATH, and verifies **fully locally** against a pinned
-  `trusted_root.json` shipped in the Feature — **no Sigstore (TUF/Rekor) network**. It does need egress to
-  `github.com` to fetch cosign (a ~150 MB one-time download per build) unless cosign is already in the
-  image. On non-Linux, or a CPU with no pinned cosign, pre-install cosign or use `checksum`.
+- **`cosign` (default) — resolve → fetch-by-digest → verify.** Proves *authenticity*, not just integrity.
+  The auspex release workflow **keyless-signs** a `version→digest` index (`manifest.json`, an OCI
+  image-index) that binds the tag + each os/arch to the artifact's sha256 (Sigstore; auspex ADR 0033 §4/§5,
+  ADR 0047). The Feature keyless-verifies that manifest against auspex's pinned release identity, **asserts
+  its version annotation matches the requested tag** (closing the version-substitution gap), reads the digest
+  for this os/arch, then fetches the bytes **by digest** from the content-addressed blob store
+  (`blobs/sha256/<digest>`) and self-verifies `sha256(bytes)` == the signed digest. It is **self-contained**:
+  it **auto-provisions** a pinned cosign **and jq** (each verified against a hardcoded SHA-256) when not on
+  PATH, and verifies **fully locally** against a pinned `trusted_root.json` shipped in the Feature — **no
+  Sigstore (TUF/Rekor) network**. It does need egress to `github.com` for cosign + jq (a one-time download
+  per build) unless they're already in the image. On non-Linux/macOS, or a CPU with no pinned cosign,
+  pre-install cosign (and jq) or use `checksum`.
 - **`checksum`.** Fetches `<binaryUri>.sha256` and compares it to the SHA-256 of the download. A mismatch
   **or a missing sidecar** fails the install. Integrity only (not provenance), but needs no tooling and no
   egress beyond the download host.
@@ -170,34 +177,44 @@ the Feature pins `trusted_root.json` to stay offline):
 
 ```bash
 HOST=<your-auspex-download-host>   # the concrete download host, provided at onboarding
-V=v0.1.0
-curl -fsSLO https://$HOST/releases/$V/checksums.txt
-curl -fsSLO https://$HOST/releases/$V/checksums.txt.cosign.bundle
+V=v0.1.0; OS=linux; ARCH=amd64
+curl -fsSLO https://$HOST/releases/$V/manifest.json
+curl -fsSLO https://$HOST/releases/$V/manifest.json.cosign.bundle
 cosign verify-blob \
-  --bundle checksums.txt.cosign.bundle \
+  --bundle manifest.json.cosign.bundle \
   --certificate-identity-regexp '^https://github\.com/(?i:attuned-corp)/auspex/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  checksums.txt
-# then confirm your downloaded binary's sha256 appears in checksums.txt
+  manifest.json
+# confirm the manifest is for the tag you asked for, then read + fetch the by-digest artifact for your os/arch:
+test "$(jq -r '.annotations["org.opencontainers.image.version"]' manifest.json)" = "$V"
+DIGEST=$(jq -r --arg os "$OS" --arg arch "$ARCH" \
+  '.manifests[] | select(.mediaType=="application/octet-stream" and .platform.os==$os and .platform.architecture==$arch) | .digest' manifest.json)
+curl -fsSLO "https://$HOST/blobs/sha256/${DIGEST#sha256:}"
+# then confirm sha256(the downloaded blob) == ${DIGEST#sha256:}
 ```
 
-### Updating the pinned cosign / trust root
+### Updating the pinned cosign / jq / trust root
 
-`verify: cosign` is self-contained by pinning three things in the **shared verify recipe**
+`verify: cosign` is self-contained by pinning four things in the **shared verify recipe**
 ([`src/span-auspex/verify-lib.sh`](./src/span-auspex/verify-lib.sh)): the cosign **version**
 (`COSIGN_VERSION`) + per-os/arch **SHA-256** (`COSIGN_SHA256_linux_amd64` / `_linux_arm64` /
-`_darwin_amd64` / `_darwin_arm64` / `_windows_amd64`) and the Sigstore **`trusted_root.json`** beside it.
-These pins are the **single source of truth** shared by the Feature, the `curl|sh` + PowerShell bootstrap,
-and the MDM gate; the `reconcile-trust` guard fails CI if `COSIGN_VERSION` / the identity / the issuer drift
-from the auspex signer's descriptor. Keep `COSIGN_VERSION` in lock-step with the **signer** — the auspex
-repo's `Makefile.setup.mk` `COSIGN_VERSION`, the version the release workflow signs with — and bump them
-together:
+`_darwin_amd64` / `_darwin_arm64` / `_windows_amd64`); the **jq** version (`JQ_VERSION`) + per-os/arch
+**SHA-256** (`JQ_SHA256_linux_amd64` / `_linux_arm64` / `_macos_amd64` / `_macos_arm64`), which the cosign
+tier auto-provisions to parse the signed manifest (bash only — the PowerShell installer parses it with
+native JSON); and the Sigstore **`trusted_root.json`** beside it. These pins are the **single source of
+truth** shared by the Feature, the `curl|sh` + PowerShell bootstrap, and the MDM gate; the `reconcile-trust`
+guard fails CI if `COSIGN_VERSION` / the identity / the issuer drift from the auspex signer's descriptor.
+Keep `COSIGN_VERSION` in lock-step with the **signer** — the auspex repo's `Makefile.setup.mk`
+`COSIGN_VERSION`, the version the release workflow signs with — and bump them together:
 
 ```bash
-# 1) match the signer's version, then capture the release binary hashes for that tag (all pinned platforms):
+# 1) match the signer's cosign version, then capture the release binary hashes (all pinned platforms):
 curl -fsSL https://github.com/sigstore/cosign/releases/download/<vX.Y.Z>/cosign_checksums.txt \
   | grep -E 'cosign-(linux|darwin)-(amd64|arm64)$|cosign-windows-amd64\.exe$'
-# 2) refresh the pinned Sigstore trust root (only when cosign or Sigstore rotates roots):
+# 2) refresh the pinned jq (any recent jq parses the manifest; bump to keep current):
+curl -fsSL https://github.com/jqlang/jq/releases/download/<jq-X.Y.Z>/sha256sum.txt \
+  | grep -E 'jq-(linux|macos)-(amd64|arm64)$'
+# 3) refresh the pinned Sigstore trust root (only when cosign or Sigstore rotates roots):
 cosign initialize
 cp ~/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json \
    src/span-auspex/trusted_root.json

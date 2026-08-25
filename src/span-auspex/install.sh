@@ -25,7 +25,7 @@ SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 # and the fetch/verify functions) live in the SHARED verify library beside this script — the ONE verifier
 # this repo ships, also assembled into the curl|sh bootstrap and sourced by the MDM gate, so there is a
 # single recipe to maintain rather than a per-consumer copy. Sourcing it defines COSIGN_* / TRUSTED_ROOT +
-# fetch / verify_sha256 / verify_cosign / …; TRUSTED_ROOT resolves next to the lib (this same dir once
+# fetch / acquire_verified (the raw-binary resolve→fetch-by-digest→verify entrypoint) / …; TRUSTED_ROOT resolves next to the lib (this same dir once
 # packaged into the Feature). The reconcile guard keeps the pins in lock-step with auspex's signing descriptor.
 # shellcheck disable=SC2034  # consumed by the sourced verify-lib.sh (sets the message voice)
 AUSPEX_VERIFY_LOG_PREFIX="auspex feature"
@@ -74,24 +74,13 @@ case "$BINARY_URI" in
         }
         ;;
     esac
-    echo "auspex feature: downloading binary from ${BINARY_URI}"
-    # Download to a temp file and verify BEFORE it becomes the on-PATH binary — a tampered or truncated
-    # download must never be chmod +x'd into place. Only a passing (or explicitly disabled) verification
-    # promotes it to BIN_DEST.
+    echo "auspex feature: acquiring binary (verify: ${VERIFY}) for ${BINARY_URI}"
+    # acquire_verified fetches + verifies per tier and writes the TRUSTED bytes to the temp; only a passing
+    # (or explicitly disabled) verification returns, so a tampered/truncated artifact is never chmod +x'd
+    # into place. verify: cosign resolves the signed manifest and fetches the content-addressed BLOB (not the
+    # version-path bytes); checksum/none fetch the version path. Only on success do we promote it to BIN_DEST.
     dl_tmp="$(mktemp)"
-    fetch "$BINARY_URI" "$dl_tmp"
-    case "$VERIFY" in
-      none)
-        echo "auspex feature: verify: none — installing WITHOUT integrity verification (not recommended for a remote source)" >&2
-        ;;
-      checksum)
-        verify_sha256 "$dl_tmp" "$BINARY_URI"
-        ;;
-      cosign)
-        verify_sha256 "$dl_tmp" "$BINARY_URI"
-        verify_cosign "$dl_tmp" "$BINARY_URI"
-        ;;
-    esac
+    acquire_verified "$BINARY_URI" "$VERIFY" "$dl_tmp"
     mv "$dl_tmp" "$BIN_DEST"
     ;;
   *)

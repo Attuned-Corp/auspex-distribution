@@ -59,6 +59,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of carrying its own copy of the identity regex / OIDC issuer / cosign
   pins / trusted root, so there is a single source of trust material. Download
   verification behavior is at parity (still fail-closed).
+- **Verify recipe (shared)** — `verify: cosign` now **resolves a cosign-signed
+  `version→digest` manifest and installs the artifact by digest** from the
+  content-addressed blob store (`blobs/sha256/<digest>`), self-verifying
+  `sha256(bytes)` against the signed digest — replacing the previous check of the
+  binary's digest against a signed `checksums.txt`. The Feature (**0.4.0**), the
+  `curl | sh` + PowerShell installers, and the MDM gate move together (one
+  recipe). The bash tiers auto-provision a pinned, hash-checked **jq** to parse
+  the manifest (the PowerShell installer uses native JSON, no jq);
+  `AUSPEX_JQ_BASE_URL` mirrors it for air-gapped fleets. `verify: checksum` and
+  `none` are unchanged.
+
+### Security
+
+- **Closed a version-substitution gap in `verify: cosign`.** Verification is now
+  bound to the requested release tag: the signed manifest's version annotation
+  must equal the tag in the install URL, and the bytes are fetched by the
+  manifest's signed digest — so one release's artifact can no longer be served
+  under a different version's path and pass verification. (The previous
+  digest-membership check against a signed `checksums.txt` was tag-agnostic.)
 
 ## [2026-08-19]
 
