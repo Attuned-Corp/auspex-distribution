@@ -83,19 +83,21 @@ org-wide credential, and it pairs with a team environment:
 
 | Name | Kind | Scope | Value |
 |---|---|---|---|
-| `AUSPEX_CLOUD_TOKEN` | **Runtime Secret** | **Team** | your org token |
-| `AUSPEX_BASE_URL` | Environment variable | Team | your auspex download host / mirror (provided at onboarding), e.g. `https://<your-auspex-download-host>` |
-| `AUSPEX_VERSION` | Environment variable (optional) | Team | the signed release tag (default `v0.1.0`) |
-| `AUSPEX_VERIFY` | Environment variable (optional) | Team | `cosign` (default) · `checksum` · `none` |
+| `AUSPEX_CLOUD_TOKEN` | Runtime Secret | **Team** | your org token |
+| `AUSPEX_BASE_URL` | Runtime Secret or env var | **Team** | your auspex download host / mirror (provided at onboarding), e.g. `https://<your-auspex-download-host>` |
+| `AUSPEX_VERSION` | Runtime Secret or env var (optional) | **Team** | the signed release tag (default `v0.1.0`) |
+| `AUSPEX_VERIFY` | Runtime Secret or env var (optional) | **Team** | `cosign` (default) · `checksum` · `none` |
 
 `AUSPEX_CLOUD_WORK_EMAIL` is **optional** — leave it unset and the work email is auto-discovered; set it
 only to override the discovered value.
 
-> **Kind matters — build vs. run time.** `AUSPEX_BASE_URL` (and `AUSPEX_VERSION`/`AUSPEX_VERIFY`) MUST be
-> **environment variables**: `install` fetches the binary at **Build** time, and Cursor injects **Runtime
-> Secrets only at agent run time** — so a `AUSPEX_BASE_URL` created as a Runtime Secret is invisible to the
-> Build and the fetch fails. Only `AUSPEX_CLOUD_TOKEN` is a Runtime Secret (the daemon reads it at run time).
-> (Dockerfile variant: pass `AUSPEX_BASE_URL` as a build arg instead — see `environment.docker.json`.)
+> **Scope matters more than kind (no-Dockerfile recipe).** The primary recipe's `install` step runs in the
+> **agent context**, so it sees **team-scoped** secrets — a Runtime Secret *or* an environment variable both
+> work — but **not user-scoped** values (those reach only the run phase). So set `AUSPEX_BASE_URL` (and
+> `AUSPEX_VERSION`/`AUSPEX_VERIFY`) at the **Team** scope; the *kind* doesn't matter. A user-scoped
+> `AUSPEX_BASE_URL` is invisible to `install` and the fetch fails.
+> (Dockerfile variant: a true image **Build** sees only build args — pass `AUSPEX_BASE_URL` via `--build-arg`
+> instead; see `environment.docker.json`.)
 
 Then **launch a normal cloud agent**. (Don't use the interactive "Set up agent" button — that is a
 different, ephemeral setup mode.)

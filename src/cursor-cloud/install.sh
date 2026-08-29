@@ -16,8 +16,9 @@
 # (writing /usr/local/bin, placing /etc/cursor hooks) therefore go through a resolved $SUDO: empty when
 # already root, `sudo -E` when non-root-but-sudo, and unavailable otherwise (→ user-tier fallback).
 #
-# Env it reads (set these as ENVIRONMENT VARIABLES, scoped to the environment/team so the Build can see them;
-# the TOKEN as a Runtime Secret — see README):
+# Env it reads (set these as TEAM-scoped secrets so the install phase can see them — for the no-Dockerfile
+# recipe a Runtime Secret or an environment variable both work; only user-scoped values are invisible here.
+# See README):
 #   AUSPEX_BASE_URL       (required, https)  your auspex download host / mirror (provided at onboarding)
 #   AUSPEX_VERSION        (default v0.1.0)    the signed auspex BINARY release the bootstrap installs (--version)
 #   AUSPEX_VERIFY         (default cosign)    cosign | checksum | none  (cosign needs github.com egress)
@@ -57,16 +58,18 @@ fi
 #    Privileged installs place it at /usr/local/bin (via $SUDO) so the system-tier hook resolves it;
 #    unprivileged installs let the bootstrap use its user-writable default and wire the user tier below.
 if ! command -v auspex >/dev/null 2>&1; then
-  # install runs at BUILD time, where only ENVIRONMENT VARIABLES are available — NOT Runtime Secrets (those
-  # are injected only at agent run time), and only when scoped to the environment/team (user-scoped secrets
-  # are not present during a Build). So AUSPEX_BASE_URL must be an environment/team-scoped environment
-  # variable; a Runtime Secret or a user-scoped value is invisible here and this fetch fails.
-  : "${AUSPEX_BASE_URL:?set AUSPEX_BASE_URL to your auspex download host (https://…) as an environment/team-scoped ENVIRONMENT VARIABLE (available at build), not a Runtime Secret}"
+  # The no-Dockerfile install phase runs in the AGENT context (as the agent user), so it sees TEAM-scoped
+  # secrets — a Runtime Secret OR an environment variable both work — but NOT user-scoped values. So set
+  # AUSPEX_BASE_URL as a TEAM-scoped secret (type doesn't matter here); a user-scoped value is invisible and
+  # this fetch fails. (Dockerfile variant: a true image build sees only build args — pass it via --build-arg.)
+  : "${AUSPEX_BASE_URL:?set AUSPEX_BASE_URL to your auspex download host (https://…) as a TEAM-scoped secret (Runtime Secret or environment variable); a user-scoped value is not visible to install}"
   curl -fsSL "$BOOTSTRAP_URL" -o /tmp/auspex-install.sh
+  # Run the bootstrap with BASH: the assembled auspex-install.sh uses `set -o pipefail` (a bash builtin), so
+  # `sh` (dash on Debian/Ubuntu) aborts with "Illegal option -o pipefail".
   if [ "$PRIVILEGED" -eq 1 ]; then
-    $SUDO sh /tmp/auspex-install.sh --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY" --bin-dir /usr/local/bin
+    $SUDO bash /tmp/auspex-install.sh --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY" --bin-dir /usr/local/bin
   else
-    sh /tmp/auspex-install.sh --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY"
+    bash /tmp/auspex-install.sh --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY"
   fi
 fi
 
