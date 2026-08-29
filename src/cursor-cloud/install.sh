@@ -18,15 +18,25 @@
 #
 # Env it reads (set these as ENVIRONMENT VARIABLES, scoped to the environment/team so the Build can see them;
 # the TOKEN as a Runtime Secret — see README):
-#   AUSPEX_BASE_URL     (required, https)  your auspex download host / mirror (provided at onboarding)
-#   AUSPEX_VERSION      (default v0.1.0)    the signed release tag to install
-#   AUSPEX_VERIFY       (default cosign)    cosign | checksum | none  (cosign needs github.com egress)
-#   AUSPEX_CLOUD_TOKEN  (Runtime Secret)    team-scoped org token; consumed by the daemon's enrollment
+#   AUSPEX_BASE_URL       (required, https)  your auspex download host / mirror (provided at onboarding)
+#   AUSPEX_VERSION        (default v0.1.0)    the signed auspex BINARY release the bootstrap installs (--version)
+#   AUSPEX_VERIFY         (default cosign)    cosign | checksum | none  (cosign needs github.com egress)
+#   AUSPEX_BOOTSTRAP_TAG  (default latest)    the auspex-distribution BOOTSTRAP release carrying auspex-install.sh
+#   AUSPEX_CLOUD_TOKEN    (Runtime Secret)    team-scoped org token; consumed by the daemon's enrollment
 set -euo pipefail
 
 AUSPEX_VERSION="${AUSPEX_VERSION:-v0.1.0}"
 AUSPEX_VERIFY="${AUSPEX_VERIFY:-cosign}"
-BOOTSTRAP_URL="${AUSPEX_BOOTSTRAP_URL:-https://github.com/attuned-corp/auspex-distribution/releases/download/${AUSPEX_VERSION}/auspex-install.sh}"
+# The bootstrap installer (auspex-install.sh) is published on its OWN version-resolving release
+# (tagged bootstrap-vN), INDEPENDENT of the auspex binary version — it takes --version to pick the binary.
+# So resolve it from the bootstrap release's `latest/download` alias (or a pinned AUSPEX_BOOTSTRAP_TAG),
+# NOT from an AUSPEX_VERSION-tagged release (no such asset exists there). AUSPEX_BOOTSTRAP_URL overrides both.
+if [ -n "${AUSPEX_BOOTSTRAP_TAG:-}" ]; then
+  _boot_ref="download/${AUSPEX_BOOTSTRAP_TAG}"
+else
+  _boot_ref="latest/download"
+fi
+BOOTSTRAP_URL="${AUSPEX_BOOTSTRAP_URL:-https://github.com/attuned-corp/auspex-distribution/releases/${_boot_ref}/auspex-install.sh}"
 
 # Resolve how to run privileged commands: direct if root, else passwordless sudo, else unprivileged.
 if [ "$(id -u)" -eq 0 ]; then

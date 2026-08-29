@@ -56,6 +56,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   acquisition path needs, the zero-Sigstore-egress verification invariant, and
   internal-mirror base-URL overrides (`AUSPEX_BASE_URL` / `AUSPEX_COSIGN_BASE_URL`)
   for egress-restricted / air-gapped fleets.
+- **Cursor cloud agent recipe** (**Installers**) — capture coding-agent activity
+  from **Cursor cloud agents** (Cursor-managed Linux VMs). The recipe places one
+  Cursor hook tier, runs the supervised daemon, and enrolls with Span using a
+  team-scoped org token; the engineer's work email is auto-discovered from Cursor's
+  agent metadata socket, so no per-user secret is needed. The scripts
+  (`cursor-cloud-install.sh` / `-start.sh` / `-preflight.sh`, sourced from
+  `src/cursor-cloud/`) are **cosign-signed and published as GitHub Release assets**,
+  consumed from `releases/latest/download/` — the same trust posture as the Dev
+  Container Feature. A consumer example (team-level and per-repository, plus a
+  custom-image Dockerfile variant) lives in `examples/cursor-cloud/`.
 
 ### Changed
 
