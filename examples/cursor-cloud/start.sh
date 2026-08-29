@@ -25,7 +25,14 @@ else
 fi
 
 # The daemon inherits the exported AUSPEX_CLOUD_WORK_EMAIL + AUSPEX_CLOUD_TOKEN and enrolls at runtime.
-LOG_DIR="${AUSPEX_HOME:-$HOME/.auspex}/run"
+# The runspace is an OWNER-ONLY (0700) private dir: the daemon FAILS CLOSED if run/ grants group/other
+# access ("has mode 0755, must be 0700 … refusing to serve") and it will NOT re-permission an existing dir.
+# A plain `mkdir` lands at 0755 under the default umask, so create it under a 077 umask AND chmod it
+# explicitly (the dir may already exist at 0755 from a prior run baked into the Build snapshot).
+AUSPEX_STATE="${AUSPEX_HOME:-$HOME/.auspex}"
+LOG_DIR="$AUSPEX_STATE/run"
+umask 077
 mkdir -p "$LOG_DIR"
+chmod 700 "$AUSPEX_STATE" "$LOG_DIR"
 auspex daemon --supervise >> "$LOG_DIR/supervise.log" 2>&1 &
 echo "auspex(start): supervised daemon launched (log: $LOG_DIR/supervise.log)"
