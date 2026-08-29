@@ -1,0 +1,11 @@
+{
+  "//": "auspex Cursor cloud capture — DOCKERFILE variant (for teams already running a custom base image).",
+  "//1": "The binary is fetched + verified at BUILD (baked into the image), so the per-agent install is faster",
+  "//2": "and needs no download egress at run time. Placement + enrollment still happen at install.",
+  "//activate": "To use THIS variant instead of the primary: copy Dockerfile + install.sh + start.sh into",
+  "//activate2": "your repo's .cursor/, then `cp .cursor/environment.docker.json .cursor/environment.json`,",
+  "//activate3": "commit, and push to the launch branch. Set AUSPEX_BASE_URL as a build arg (see Dockerfile).",
+  "build": { "dockerfile": ".cursor/Dockerfile", "context": "." },
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh"
+}

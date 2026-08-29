@@ -1,0 +1,12 @@
+{
+  "//": "auspex Cursor cloud capture — PRIMARY recipe (no custom image). Copy this file + install.sh +",
+  "//1": "start.sh (+ preflight.sh) into your repo's .cursor/ directory, commit, and push to the branch you",
+  "//2": "launch the cloud agent on. Cursor reads .cursor/environment.json from the launch branch — launch a",
+  "//3": "NORMAL agent (the interactive 'Set up agent' button is a different mode; don't use it).",
+  "//secrets": "Set AUSPEX_CLOUD_TOKEN as a Runtime Secret (team-scoped). Set AUSPEX_BASE_URL (+ optional",
+  "//secrets2": "AUSPEX_VERSION / AUSPEX_VERIFY) as environment variables. The work email is auto-discovered —",
+  "//secrets3": "no per-user secret needed. Egress allowlist + full walkthrough: see README.md.",
+  "//phases": "install runs during Build (post-clone, sudo-capable); start runs at each agent run.",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh"
+}
