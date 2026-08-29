@@ -28,7 +28,11 @@ BOOTSTRAP_URL="${AUSPEX_BOOTSTRAP_URL:-https://github.com/attuned-corp/auspex-di
 #    DOWNLOADED BINARY fail-closed against the embedded trust root, so a tampered/unsigned/wrong-version
 #    artifact aborts here (no capture wired).
 if ! command -v auspex >/dev/null 2>&1; then
-  : "${AUSPEX_BASE_URL:?set AUSPEX_BASE_URL to your auspex download host (https://…)}"
+  # NOTE: install runs at BUILD time, where only ENVIRONMENT VARIABLES are available — NOT Runtime Secrets
+  # (those are injected only at agent run time). So AUSPEX_BASE_URL must be set as an environment variable;
+  # a Runtime Secret is invisible here and this fetch fails. (AUSPEX_CLOUD_TOKEN, by contrast, IS a Runtime
+  # Secret — the daemon consumes it at run time, not here.)
+  : "${AUSPEX_BASE_URL:?set AUSPEX_BASE_URL to your auspex download host (https://…) as an ENVIRONMENT VARIABLE (available at build), not a Runtime Secret}"
   curl -fsSL "$BOOTSTRAP_URL" \
     | sh -s -- --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY"
 fi

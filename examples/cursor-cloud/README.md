@@ -80,6 +80,12 @@ org-wide credential, and it pairs with a team environment:
 `AUSPEX_CLOUD_WORK_EMAIL` is **optional** — leave it unset and the work email is auto-discovered; set it
 only to override the discovered value.
 
+> **Kind matters — build vs. run time.** `AUSPEX_BASE_URL` (and `AUSPEX_VERSION`/`AUSPEX_VERIFY`) MUST be
+> **environment variables**: `install` fetches the binary at **Build** time, and Cursor injects **Runtime
+> Secrets only at agent run time** — so a `AUSPEX_BASE_URL` created as a Runtime Secret is invisible to the
+> Build and the fetch fails. Only `AUSPEX_CLOUD_TOKEN` is a Runtime Secret (the daemon reads it at run time).
+> (Dockerfile variant: pass `AUSPEX_BASE_URL` as a build arg instead — see `environment.docker.json`.)
+
 Then **launch a normal cloud agent**. (Don't use the interactive "Set up agent" button — that is a
 different, ephemeral setup mode.)
 
