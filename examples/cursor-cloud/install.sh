@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
-# auspex — Cursor cloud agent `install` phase (post-clone Build, root/sudo-capable).
+# auspex — Cursor cloud agent `install` phase (post-clone Build, runs as ROOT).
 #
-# Fetches + fail-closed-verifies the signed auspex binary, places EXACTLY ONE Cursor hook tier, and arms the
-# supervised daemon + enrollment. Idempotent — safe to re-run. Runs from the repo root (=/workspace).
+# Fetches + fail-closed-verifies the signed auspex binary, then places EXACTLY ONE Cursor hook tier with the
+# shipped placement primitive `auspex hooks install [--system]`. Identity + run mode are handled at RUN time
+# by `auspex daemon --supervise` (start.sh) — it enrolls from AUSPEX_CLOUD_TOKEN and arms the cold-start
+# capture relax — so NO `auspex install` is run here. Idempotent — safe to re-run.
+#
+# Why not `auspex install`? That is the per-user laptop installer: it REFUSES to run as root (the cloud VM
+# is root), and `auspex install --system` is a different thing entirely — an MDM *converge* that requires a
+# pre-deployed managed-config tree and places no binary. `hooks install --system` is the placement primitive
+# the auspex dev-container Feature drives, and it is happy as a direct root shell (no MDM tree needed).
 #
 # Env it reads (set these as Cursor environment variables; the TOKEN as a Runtime Secret — see README):
 #   AUSPEX_BASE_URL     (required, https)  your auspex download host / mirror (provided at onboarding)
 #   AUSPEX_VERSION      (default v0.1.0)    the signed release tag to install
 #   AUSPEX_VERIFY       (default cosign)    cosign | checksum | none  (cosign needs github.com egress)
-#   AUSPEX_CLOUD_TOKEN  (Runtime Secret)    team-scoped org token; consumed by enrollment
+#   AUSPEX_CLOUD_TOKEN  (Runtime Secret)    team-scoped org token; consumed by the daemon's enrollment
 set -euo pipefail
 
 AUSPEX_VERSION="${AUSPEX_VERSION:-v0.1.0}"
 AUSPEX_VERIFY="${AUSPEX_VERIFY:-cosign}"
 BOOTSTRAP_URL="${AUSPEX_BOOTSTRAP_URL:-https://github.com/attuned-corp/auspex-distribution/releases/download/${AUSPEX_VERSION}/auspex-install.sh}"
 
-# 1) Acquire the binary — skipped when a custom image already baked it (Dockerfile variant). The bootstrap
-#    script's own bytes are TLS+origin-trusted; it verifies the DOWNLOADED BINARY fail-closed against the
-#    embedded trust root, so a tampered/unsigned/wrong-version artifact aborts here (no capture wired).
+# 1) Acquire the binary at the machine-wide path the SYSTEM-tier hook command references
+#    (appinfo.SystemBinaryPath = /usr/local/bin/auspex) — skipped when a custom image already baked it
+#    (Dockerfile variant). The bootstrap script's own bytes are TLS+origin-trusted; it verifies the
+#    DOWNLOADED BINARY fail-closed against the embedded trust root, so a tampered/unsigned/wrong-version
+#    artifact aborts here (no capture wired).
 if ! command -v auspex >/dev/null 2>&1; then
   : "${AUSPEX_BASE_URL:?set AUSPEX_BASE_URL to your auspex download host (https://…)}"
   curl -fsSL "$BOOTSTRAP_URL" \
@@ -26,22 +35,19 @@ fi
 
 AUSPEX_BIN="$(command -v auspex)"
 
-# 2) Single-tier placement + supervised daemon + enrollment, via ONE `auspex install` call (it self-copies
-#    the binary, places the hook tier, arms the run mode, and provisions identity from AUSPEX_CLOUD_TOKEN).
-#    Ladder: prefer the SYSTEM tier (/etc/cursor/hooks.json) — documented cloud support, out-of-tree (no
-#    commit-leak). Use it whenever we can write /etc: DIRECTLY when already root (the usual cloud case — the
-#    install phase runs as root, no sudo needed, and the stock image may not even ship sudo), else via
-#    passwordless sudo. Fall back to the USER tier (~/.cursor/hooks.json) only when neither is possible.
-#    NEVER both: auspex's ConflictingPlacement marker guard refuses a second tier, so no double-capture.
+# 2) Place EXACTLY ONE hook tier with the shipped placement primitive `auspex hooks install`. Prefer the
+#    SYSTEM tier (/etc/cursor/hooks.json) — documented cloud support, out-of-tree (no commit-leak), and the
+#    only tier that fires under Claude's allowManagedHooksOnly lockdown; its command references the fixed
+#    /usr/local/bin/auspex placed above. It needs root (the cloud install phase runs as root); fall back to
+#    the USER tier (~/.cursor/hooks.json) only if somehow not root. NEVER both: auspex's placement-
+#    exclusivity guard refuses a conflicting second tier, so double-capture can't happen. No `auspex install`
+#    (identity + run mode come from the daemon at start), so the root-refusing per-user installer is avoided.
 if [ "$(id -u)" -eq 0 ]; then
-  echo "auspex(install): running as root — installing at the SYSTEM tier (/etc/cursor)"
-  "$AUSPEX_BIN" install --system --supervised
-elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-  echo "auspex(install): passwordless sudo — installing at the SYSTEM tier (/etc/cursor)"
-  sudo -E "$AUSPEX_BIN" install --system --supervised
+  echo "auspex(install): root — placing SYSTEM-tier hooks (/etc/cursor)"
+  "$AUSPEX_BIN" hooks install --system
 else
-  echo "auspex(install): no root/sudo — installing at the USER tier (~/.cursor)"
-  "$AUSPEX_BIN" install --supervised
+  echo "auspex(install): not root — placing USER-tier hooks (~/.cursor)"
+  "$AUSPEX_BIN" hooks install
 fi
 
 # 3) Stage the run-phase launcher at a STABLE ABSOLUTE PATH. Cursor's `start` command runs from an

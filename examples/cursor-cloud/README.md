@@ -16,8 +16,8 @@ daemon, and enrolls with Span. It needs **one secret** (a team-scoped org token)
 | File | Role |
 |---|---|
 | `environment.json` | **Primary** recipe (no custom image). `install` + `start` hooks. |
-| `install.sh` | Build-phase: fetch + verify the signed binary, place one hook tier, arm the daemon. |
-| `start.sh` | Run-phase: derive the work email from the metadata socket, launch the supervised daemon. |
+| `install.sh` | Build-phase (root): fetch + verify the signed binary, place one hook tier (`auspex hooks install --system`). |
+| `start.sh` | Run-phase: derive the work email from the metadata socket, launch the supervised daemon (which enrolls). |
 | `preflight.sh` | Optional in-agent check for the two cloud-env facts `auspex status` can't see. |
 | `environment.docker.json` + `Dockerfile` | **Variant** for teams already using a custom base image (bakes the binary at build). |
 
@@ -114,11 +114,17 @@ placement tier (no double-capture).
   pinned binary from `AUSPEX_BASE_URL` and **cosign-verifies it against an offline embedded trust root
   before execution** — a tampered/unsigned/wrong-version artifact fails closed (no capture wired). A custom
   image (Dockerfile variant) bakes this at build so the run-phase skips the download.
-- **Single hook tier (no double-capture).** `install.sh` prefers the **system** tier
-  (`/etc/cursor/hooks.json`) — installed **directly when the install phase runs as root** (the usual cloud
-  case), or via passwordless `sudo` otherwise — and falls back to the **user** tier (`~/.cursor/hooks.json`)
-  only when neither is possible. Never both: auspex's placement marker guard refuses a conflicting second
-  tier, so events are captured exactly once.
+- **Single hook tier (no double-capture).** `install.sh` runs the shipped placement primitive
+  `auspex hooks install --system` as root, wiring the **system** tier (`/etc/cursor/hooks.json`) — the same
+  primitive auspex's dev-container Feature uses; it falls back to the **user** tier (`~/.cursor/hooks.json`)
+  only if the build phase is somehow not root. It deliberately does **not** run `auspex install` (a per-user
+  installer that refuses root) or `auspex install --system` (an MDM converge needing a pre-deployed managed
+  tree). Never both tiers: auspex's placement marker guard refuses a conflicting second, so events are
+  captured exactly once.
+- **Identity + run mode from the daemon, not the installer.** `start.sh` runs `auspex daemon --supervise`,
+  which enrolls from `AUSPEX_CLOUD_TOKEN` (+ the resolved work email) at run time and arms the cold-start
+  capture relax itself — so no install-time enrollment step is needed, and nothing needs to run as a
+  non-root user.
 - **Run-phase launcher staged at an absolute path.** Cursor's `start` command runs from an unspecified
   working directory (typically `$HOME`, not the repo root), so `install.sh` copies `start.sh` to
   `$HOME/.auspex/cloud-start.sh` and the `start` hook invokes that absolute path. (The team-level curl|bash
