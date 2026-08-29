@@ -23,7 +23,34 @@ daemon, and enrolls with Span. It needs **one secret** (a team-scoped org token)
 
 ## Install
 
-1. Copy the files into your repository's `.cursor/` directory:
+Set up the environment once — either at the **team level** (recommended; covers every repo) or
+**per-repository**. Then configure the secret and launch. `install.sh` and `start.sh` are self-contained
+(they reference no repo files), so the team-level path can run them straight from this repo.
+
+### Option A — team-level environment (recommended)
+
+In Cursor, go to **Dashboard → Cloud Agents → Environments** and create/edit your **team** environment.
+Point its commands at this recipe — no per-repository files needed:
+
+- **Install command:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Attuned-Corp/auspex-distribution/main/examples/cursor-cloud/install.sh | bash
+```
+
+- **Start command:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Attuned-Corp/auspex-distribution/main/examples/cursor-cloud/start.sh | bash
+```
+
+Pin `main` to a release tag (e.g. `v0.1.0`) for a reproducible setup. A repo that ships its own
+`.cursor/environment.json` overrides the team environment (Cursor resolves repo → personal → team,
+first match wins), so the team environment applies to every repo that doesn't define its own.
+
+### Option B — per-repository
+
+Copy the files into the repo's `.cursor/` directory:
 
 ```bash
 mkdir -p .cursor
@@ -33,26 +60,28 @@ cp examples/cursor-cloud/start.sh .cursor/start.sh
 cp examples/cursor-cloud/preflight.sh .cursor/preflight.sh   # optional
 ```
 
-   For the Dockerfile variant instead: also copy `Dockerfile`, then
-   `cp examples/cursor-cloud/environment.docker.json .cursor/environment.json`.
+For the Dockerfile variant instead: also copy `Dockerfile`, then
+`cp examples/cursor-cloud/environment.docker.json .cursor/environment.json`. Then **commit and push** to the
+branch you'll launch the agent on — Cursor reads `.cursor/environment.json` from the launch branch, so an
+uncommitted file is not seen.
 
-2. **Commit and push** to the branch you'll launch the agent on. Cursor reads `.cursor/environment.json`
-   from the launch branch — an uncommitted file is not seen.
+### Then: secret + settings, and launch
 
-3. Configure secrets + environment (Cursor → your project's cloud agent settings):
+Configure these in Cursor's cloud agent **Secrets** tab. Prefer the **team** scope — the token is one
+org-wide credential, and it pairs with a team environment:
 
-   | Name | Kind | Value |
-   |---|---|---|
-   | `AUSPEX_CLOUD_TOKEN` | **Runtime Secret** | your team-scoped org token |
-   | `AUSPEX_BASE_URL` | Environment variable | your auspex download host / mirror (provided at onboarding), e.g. `https://<your-auspex-download-host>` |
-   | `AUSPEX_VERSION` | Environment variable (optional) | the signed release tag (default `v0.1.0`) |
-   | `AUSPEX_VERIFY` | Environment variable (optional) | `cosign` (default) · `checksum` · `none` |
+| Name | Kind | Scope | Value |
+|---|---|---|---|
+| `AUSPEX_CLOUD_TOKEN` | **Runtime Secret** | **Team** | your org token |
+| `AUSPEX_BASE_URL` | Environment variable | Team | your auspex download host / mirror (provided at onboarding), e.g. `https://<your-auspex-download-host>` |
+| `AUSPEX_VERSION` | Environment variable (optional) | Team | the signed release tag (default `v0.1.0`) |
+| `AUSPEX_VERIFY` | Environment variable (optional) | Team | `cosign` (default) · `checksum` · `none` |
 
-   `AUSPEX_CLOUD_WORK_EMAIL` is **optional** — leave it unset and the work email is auto-discovered. Set it
-   (as a secret) only to override the discovered value.
+`AUSPEX_CLOUD_WORK_EMAIL` is **optional** — leave it unset and the work email is auto-discovered; set it
+only to override the discovered value.
 
-4. **Launch a normal cloud agent** on that branch. (Don't use the interactive "Set up agent" button — that
-   is a different, ephemeral setup mode.)
+Then **launch a normal cloud agent**. (Don't use the interactive "Set up agent" button — that is a
+different, ephemeral setup mode.)
 
 ## Networking / egress allowlist
 
@@ -64,6 +93,8 @@ hardcoded here; see [`docs/networking.md`](../../docs/networking.md) for the ful
 - `github.com` + `objects.githubusercontent.com` — the bootstrap script asset, and (only when
   `AUSPEX_VERIFY=cosign`) the pinned cosign/jq CLIs. Use `AUSPEX_VERIFY=checksum` to drop the cosign egress
   (SHA-256 integrity only).
+- `raw.githubusercontent.com` — only for the **team-level** path (Option A), which fetches this recipe's
+  scripts. The per-repository path (Option B) commits them, so it doesn't need this host.
 
 ## Verification
 
