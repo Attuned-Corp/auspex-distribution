@@ -121,12 +121,13 @@ placement tier (no double-capture).
   before execution** — a tampered/unsigned/wrong-version artifact fails closed (no capture wired). A custom
   image (Dockerfile variant) bakes this at build so the run-phase skips the download.
 - **Single hook tier (no double-capture).** `install.sh` runs the shipped placement primitive
-  `auspex hooks install --system` as root, wiring the **system** tier (`/etc/cursor/hooks.json`) — the same
-  primitive auspex's dev-container Feature uses; it falls back to the **user** tier (`~/.cursor/hooks.json`)
-  only if the build phase is somehow not root. It deliberately does **not** run `auspex install` (a per-user
-  installer that refuses root) or `auspex install --system` (an MDM converge needing a pre-deployed managed
-  tree). Never both tiers: auspex's placement marker guard refuses a conflicting second, so events are
-  captured exactly once.
+  `auspex hooks install --system`, wiring the **system** tier (`/etc/cursor/hooks.json`) — the same primitive
+  auspex's dev-container Feature uses. The install phase runs as root on a custom Dockerfile image and as a
+  non-root user *with passwordless sudo* on the stock image, so the script elevates accordingly (direct when
+  root, `sudo -E` otherwise) and only falls back to the **user** tier (`~/.cursor/hooks.json`) when it can't
+  elevate at all. It deliberately does **not** run `auspex install` (a per-user installer that refuses root)
+  or `auspex install --system` (an MDM converge needing a pre-deployed managed tree). Never both tiers:
+  auspex's placement marker guard refuses a conflicting second, so events are captured exactly once.
 - **Identity + run mode from the daemon, not the installer.** `start.sh` runs `auspex daemon --supervise`,
   which enrolls from `AUSPEX_CLOUD_TOKEN` (+ the resolved work email) at run time and arms the cold-start
   capture relax itself — so no install-time enrollment step is needed, and nothing needs to run as a
