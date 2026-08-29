@@ -24,17 +24,38 @@ if ! command -v auspex >/dev/null 2>&1; then
     | sh -s -- --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY"
 fi
 
+AUSPEX_BIN="$(command -v auspex)"
+
 # 2) Single-tier placement + supervised daemon + enrollment, via ONE `auspex install` call (it self-copies
 #    the binary, places the hook tier, arms the run mode, and provisions identity from AUSPEX_CLOUD_TOKEN).
-#    Ladder: prefer the SYSTEM tier (/etc/cursor/hooks.json) via sudo — documented cloud support, out-of-tree
-#    (no commit-leak). Fall back to the USER tier (~/.cursor/hooks.json) when sudo is unavailable. NEVER both:
-#    auspex's ConflictingPlacement marker guard refuses a second tier, so double-capture can't happen.
-if sudo -n true 2>/dev/null; then
-  echo "auspex(install): sudo available — installing at the SYSTEM tier (/etc/cursor)"
-  sudo -E "$(command -v auspex)" install --system --supervised
+#    Ladder: prefer the SYSTEM tier (/etc/cursor/hooks.json) — documented cloud support, out-of-tree (no
+#    commit-leak). Use it whenever we can write /etc: DIRECTLY when already root (the usual cloud case — the
+#    install phase runs as root, no sudo needed, and the stock image may not even ship sudo), else via
+#    passwordless sudo. Fall back to the USER tier (~/.cursor/hooks.json) only when neither is possible.
+#    NEVER both: auspex's ConflictingPlacement marker guard refuses a second tier, so no double-capture.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "auspex(install): running as root — installing at the SYSTEM tier (/etc/cursor)"
+  "$AUSPEX_BIN" install --system --supervised
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  echo "auspex(install): passwordless sudo — installing at the SYSTEM tier (/etc/cursor)"
+  sudo -E "$AUSPEX_BIN" install --system --supervised
 else
-  echo "auspex(install): no sudo — installing at the USER tier (~/.cursor)"
-  auspex install --supervised
+  echo "auspex(install): no root/sudo — installing at the USER tier (~/.cursor)"
+  "$AUSPEX_BIN" install --supervised
+fi
+
+# 3) Stage the run-phase launcher at a STABLE ABSOLUTE PATH. Cursor's `start` command runs from an
+#    unspecified working directory (typically $HOME, not the repo root), so a repo-relative
+#    `bash .cursor/start.sh` won't resolve. Copy start.sh next to auspex's state so `start` can invoke it by
+#    absolute path. (The team-level curl|bash path re-fetches start.sh each run and skips this — hence the
+#    presence check keeps it non-fatal there.)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+LAUNCHER="${AUSPEX_HOME:-$HOME/.auspex}/cloud-start.sh"
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/start.sh" ]; then
+  mkdir -p "$(dirname "$LAUNCHER")"
+  cp "$SCRIPT_DIR/start.sh" "$LAUNCHER"
+  chmod +x "$LAUNCHER"
+  echo "auspex(install): staged run-phase launcher at $LAUNCHER"
 fi
 
 echo "auspex(install): ready — the daemon launches from the start command each agent run"

@@ -115,9 +115,14 @@ placement tier (no double-capture).
   before execution** — a tampered/unsigned/wrong-version artifact fails closed (no capture wired). A custom
   image (Dockerfile variant) bakes this at build so the run-phase skips the download.
 - **Single hook tier (no double-capture).** `install.sh` prefers the **system** tier
-  (`/etc/cursor/hooks.json`, via `sudo`) and falls back to the **user** tier (`~/.cursor/hooks.json`) when
-  `sudo` is unavailable — never both. auspex's placement marker guard refuses a conflicting second tier, so
-  events are captured exactly once.
+  (`/etc/cursor/hooks.json`) — installed **directly when the install phase runs as root** (the usual cloud
+  case), or via passwordless `sudo` otherwise — and falls back to the **user** tier (`~/.cursor/hooks.json`)
+  only when neither is possible. Never both: auspex's placement marker guard refuses a conflicting second
+  tier, so events are captured exactly once.
+- **Run-phase launcher staged at an absolute path.** Cursor's `start` command runs from an unspecified
+  working directory (typically `$HOME`, not the repo root), so `install.sh` copies `start.sh` to
+  `$HOME/.auspex/cloud-start.sh` and the `start` hook invokes that absolute path. (The team-level curl|bash
+  path re-fetches `start.sh` each run, so it doesn't rely on the staged copy.)
 - **Attribution with no per-user secret.** `start.sh` curls the agent metadata socket
   (`/run/cursor/api.sock` → `/v1/meta-data/owner/user-email`) and exports `AUSPEX_CLOUD_WORK_EMAIL`, which
   auspex's enrollment consumes. An explicit secret (if you set one) takes precedence; a socket failure is

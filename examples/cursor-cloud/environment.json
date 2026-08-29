@@ -6,7 +6,9 @@
   "//secrets": "Set AUSPEX_CLOUD_TOKEN as a Runtime Secret (team-scoped). Set AUSPEX_BASE_URL (+ optional",
   "//secrets2": "AUSPEX_VERSION / AUSPEX_VERIFY) as environment variables. The work email is auto-discovered —",
   "//secrets3": "no per-user secret needed. Egress allowlist + full walkthrough: see README.md.",
-  "//phases": "install runs during Build (post-clone, sudo-capable); start runs at each agent run.",
+  "//phases": "install runs during Build (post-clone, root/sudo-capable); start runs at each agent run.",
+  "//start": "start runs from an unspecified cwd (not the repo root), so it invokes the launcher install.sh",
+  "//start2": "staged at an absolute path — a repo-relative 'bash .cursor/start.sh' would not resolve.",
   "install": "bash .cursor/install.sh",
-  "start": "bash .cursor/start.sh"
+  "start": "bash \"${AUSPEX_HOME:-$HOME/.auspex}/cloud-start.sh\""
 }

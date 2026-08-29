@@ -5,7 +5,9 @@
   "//activate": "To use THIS variant instead of the primary: copy Dockerfile + install.sh + start.sh into",
   "//activate2": "your repo's .cursor/, then `cp .cursor/environment.docker.json .cursor/environment.json`,",
   "//activate3": "commit, and push to the launch branch. Set AUSPEX_BASE_URL as a build arg (see Dockerfile).",
+  "//start": "start runs from an unspecified cwd (not the repo root), so it invokes the launcher install.sh",
+  "//start2": "staged at an absolute path — a repo-relative 'bash .cursor/start.sh' would not resolve.",
   "build": { "dockerfile": ".cursor/Dockerfile", "context": "." },
   "install": "bash .cursor/install.sh",
-  "start": "bash .cursor/start.sh"
+  "start": "bash \"${AUSPEX_HOME:-$HOME/.auspex}/cloud-start.sh\""
 }
