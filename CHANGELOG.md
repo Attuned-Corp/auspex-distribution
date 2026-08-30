@@ -1,7 +1,7 @@
 # Changelog
 
 All notable, user-facing changes to the **auspex-distribution** surface — the
-`span-auspex` Dev Container Feature and the `curl | sh` / MDM installers — are
+`span-auspex` Dev Container Feature and the `curl | bash` / MDM installers — are
 recorded here. This repo is **public**, so this file is simply the durable "what
 changed" for the things customers install from it.
 
@@ -41,7 +41,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   baseline. `version`/`verify` are not consulted for a pinned digest, and a byte
   mismatch, missing blob, or malformed digest fails closed. Obtain the digest via
   the by-hand two-hop verification or your org's published pin.
-- **Installers** — a piped bootstrap installer, `curl … | sh` (bash, macOS/Linux)
+- **Installers** — a piped bootstrap installer, `curl … | bash` (macOS/Linux)
   and `irm … | iex` (PowerShell, Windows), that fetches the auspex binary for the
   detected OS/arch from the release CDN, **verifies it fail-closed** (default
   `verify: cosign` against auspex's pinned release identity; `checksum` and `none`

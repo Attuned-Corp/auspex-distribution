@@ -13,7 +13,7 @@ a compromise of one origin can't silently swap the artifact *and* the trust anch
   (`blobs/sha256/<digest>` — what `verify: cosign` resolves and installs), plus the raw binary, its
   `.sha256` sidecar, and the version-root `checksums.txt` (for the `checksum` tier / by-hand humans).
 - **Origin #2 — this repo's GitHub Releases** (`github.com` / `objects.githubusercontent.com`, Fastly):
-  the `curl|sh` + PowerShell bootstrap installers and their cosign bundles; the Dev Container Feature's
+  the `curl|bash` + PowerShell bootstrap installers and their cosign bundles; the Dev Container Feature's
   OCI artifact (ghcr.io). The pinned Sigstore **trust anchor** (`trusted_root.json`) is *embedded in* the
   Feature and the assembled installers — it ships from origin #2, never fetched at verify time.
 
@@ -31,7 +31,7 @@ and fail closed on a mismatch.
 | **Pin-by-digest** (`digest` / `--digest`) | post-trust | CDN (`blobs/sha256/<digest>` only) | — | none — self-verify only, no manifest/cosign/jq | **never** |
 | **MDM verify-gate** (pinned cosign pre-provisioned) | post-trust | CDN | — | none — cosign baked in, no manifest parse (no jq) | **never** |
 | **Dev Container Feature** `install.sh` | first-acquisition | CDN | ghcr.io (the Feature itself) | `github.com` (cosign + jq, once/build, unless in image) | **never** |
-| **`curl\|sh` bootstrap** | first-acquisition | CDN | `github.com` / `objects.githubusercontent.com` (the installer) | `github.com` (cosign + jq, unless present/mirrored) | **never** |
+| **`curl\|bash` bootstrap** | first-acquisition | CDN | `github.com` / `objects.githubusercontent.com` (the installer) | `github.com` (cosign + jq, unless present/mirrored) | **never** |
 | **`irm\|iex` bootstrap** (Windows) | first-acquisition | CDN | `github.com` / `objects.githubusercontent.com` (the installer) | `github.com` (cosign only — native JSON, no jq) | **never** |
 
 **Key invariant:** the cosign *verification step itself* makes **zero** Sigstore network calls. cosign v3
@@ -43,7 +43,7 @@ so there is no Fulcio, Rekor, or TUF traffic — proven mechanically by the netw
 ## Minimal allow-lists
 
 - **Pin-by-digest (leanest):** the **artifact CDN only**, and only its `blobs/sha256/<digest>` path — no
-  manifest, cosign, or jq is fetched (the by-digest self-verify is the whole check). The `curl|sh` / `irm`
+  manifest, cosign, or jq is fetched (the by-digest self-verify is the whole check). The `curl|bash` / `irm`
   installers still come from origin #2, but the acquisition + verification touch origin #1 alone.
 - **MDM gate (best case):** the **artifact CDN only** — cosign is pre-provisioned on the runner, and
   verification is offline. Zero external egress at verify time.

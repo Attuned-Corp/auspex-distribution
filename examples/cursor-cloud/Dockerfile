@@ -18,6 +18,9 @@ RUN apt-get update \
 ARG AUSPEX_VERSION=v0.1.0
 ARG AUSPEX_BASE_URL
 ARG AUSPEX_VERIFY=cosign
+# The bootstrap installer lives on its OWN version-resolving release (latest/download), independent of the
+# AUSPEX_VERSION binary tag it selects via --version. Pipe to bash (the assembled script is bash-only:
+# indirect ${!pinvar} expansion + set -o pipefail — dash aborts).
 RUN test -n "$AUSPEX_BASE_URL" || { echo "build-arg AUSPEX_BASE_URL is required (your auspex download host)"; exit 1; } \
- && curl -fsSL "https://github.com/attuned-corp/auspex-distribution/releases/download/${AUSPEX_VERSION}/auspex-install.sh" \
-    | sh -s -- --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY" --bin-dir /usr/local/bin
+ && curl -fsSL "https://github.com/attuned-corp/auspex-distribution/releases/latest/download/auspex-install.sh" \
+    | bash -s -- --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY" --bin-dir /usr/local/bin

@@ -10,7 +10,7 @@ cosign-verified against the **pinned release identity** — and **refuses to ins
 It adds the cosign **provenance binding** on top of the OS-native gate, bringing the managed channel to
 **parity with the Dev Container Feature** (which already verifies before use). It reuses the **one shared
 verify recipe** (`src/span-auspex/verify-lib.sh`) — the same pinned cosign + `trusted_root.json` the Feature
-and the `curl | sh` bootstrap use — so there is a single verifier to maintain.
+and the `curl | bash` bootstrap use — so there is a single verifier to maintain.
 
 ## The scripts
 
