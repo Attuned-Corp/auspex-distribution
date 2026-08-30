@@ -95,7 +95,7 @@ fi
 #    `bash .cursor/start.sh` won't resolve. Copy start.sh next to auspex's state so `start` can invoke it by
 #    absolute path. (The team-level curl|bash path re-fetches start.sh each run and skips this — hence the
 #    presence check keeps it non-fatal there.)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+if SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"; then :; else SCRIPT_DIR=""; fi
 LAUNCHER="${AUSPEX_HOME:-$HOME/.auspex}/cloud-start.sh"
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/start.sh" ]; then
   mkdir -p "$(dirname "$LAUNCHER")"
