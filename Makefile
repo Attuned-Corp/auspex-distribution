@@ -14,12 +14,13 @@ verify-test:
 assemble:
 	@./bootstrap/assemble.sh
 
-# Lint every shell script (the shared recipe, installer, bootstrap, assembler, cursor-cloud recipe, tests).
-# Requires shellcheck.
+# Lint every shell script (the shared recipe, installer, bootstrap, assembler, cursor-cloud + claude-cloud
+# recipes, tests). Requires shellcheck.
 .PHONY: shellcheck
 shellcheck:
 	@shellcheck -x src/span-auspex/verify-lib.sh src/span-auspex/install.sh \
 		cursor-cloud/install.sh cursor-cloud/start.sh cursor-cloud/preflight.sh \
+		claude-cloud/install.sh claude-cloud/session-start.sh claude-cloud/preflight.sh \
 		bootstrap/bootstrap.sh bootstrap/assemble.sh mdm/verify-gate.sh tests/install-verify-test.sh
 
 # Docker-backed behavioural smoke of the Feature is a follow-up in this repo (it needs a built auspex
