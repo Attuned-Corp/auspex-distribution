@@ -29,7 +29,7 @@ set -euo pipefail
 AUSPEX_VERSION="${AUSPEX_VERSION:-v0.1.0}"
 AUSPEX_VERIFY="${AUSPEX_VERIFY:-cosign}"
 # The bootstrap installer (auspex-install.sh) is published on its OWN version-resolving release
-# (tagged bootstrap-vN), INDEPENDENT of the auspex binary version — it takes --version to pick the binary.
+# (tagged installers-vX.Y.Z), INDEPENDENT of the auspex binary version — it takes --version to pick the binary.
 # So resolve it from the bootstrap release's `latest/download` alias (or a pinned AUSPEX_BOOTSTRAP_TAG),
 # NOT from an AUSPEX_VERSION-tagged release (no such asset exists there). AUSPEX_BOOTSTRAP_URL overrides both.
 if [ -n "${AUSPEX_BOOTSTRAP_TAG:-}" ]; then

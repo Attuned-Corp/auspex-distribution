@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to create (e.g. bootstrap-v1). Must be a fresh tag."
+        description: "Release tag to create (e.g. installers-v0.1.0). Must be a fresh tag."
         required: true
       prerelease:
         description: "Mark as prerelease (excluded from latest/download)?"

@@ -15,11 +15,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   it matters, not the implementation.
 - This repo ships **two independently-versioned artifacts** (the Dev Container
   Feature, versioned in `src/span-auspex/devcontainer-feature.json`; and the
-  installer scripts, cut as a GitHub Release). Rather than pretend the repo has
-  one version, sections are **date-stamped** and each bullet names the component
-  (and its version, where relevant): e.g. `**Feature 0.4.0** — …`,
-  `**Installers** — …`. Shared changes (the verify recipe, the trust anchor)
-  affect both and are noted once.
+  installer scripts, cut as a GitHub Release), so sections are **date-stamped**
+  rather than carrying one repo version.
+- **Component versions go in a short list under the date**, not in the heading —
+  keep the heading a bare `## [YYYY-MM-DD]`, then list the moved components as
+  bullets (`- **span-auspex Feature** — 0.5.0`, `- **Install surface** —
+  installers-v0.1.0`). Omit a component the release didn't move.
+- **Each change bullet leads with a bold component tag** so the reader can see at
+  a glance what it touches — one of **Feature**, **Installers**, or **Shared**
+  (the verify recipe / trust anchor / cross-cutting docs, or a capability that
+  lands in both). Format: `- **<tag>** · **<change name>** — <description>`,
+  e.g. `- **Installers** · **Bootstrap installer** — …`.
 - **Publishing** (a Feature `workflow_dispatch`, or an installer Release) rolls the
   relevant `## [Unreleased]` bullets into a new dated `## [YYYY-MM-DD]` section.
 - Categories are fixed: **Added**, **Changed**, **Fixed**, **Security**,
@@ -29,34 +35,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-08-31]
+
+Published components:
+
+- **span-auspex Feature** — `0.5.0` (GHCR OCI tag/digest)
+- **Install surface** — `installers-v0.1.0` (GitHub Release; `curl | bash` / PowerShell bootstrap, MDM verify-gate, Cursor cloud recipe scripts)
+
 ### Added
 
-- **Pin-by-digest install** (**Feature 0.5.0** + **Installers**) — a `digest`
-  option (`--digest` / `-Digest` for the bootstrap) that pins the **exact
-  artifact by content**: the install fetches it straight from the version-free
-  content-addressed blob store (`<host>/blobs/sha256/<digest>`) and self-verifies
-  `sha256(bytes)==digest`, bypassing version→manifest resolution. A digest is a
-  version-free address (the `@sha256:…`-style pin) that survives a re-tag and
-  needs no cosign/jq — the strongest supply-chain pin for a lockfile or fleet
-  baseline. `version`/`verify` are not consulted for a pinned digest, and a byte
-  mismatch, missing blob, or malformed digest fails closed. Obtain the digest via
-  the by-hand two-hop verification or your org's published pin.
-- **Installers** — a piped bootstrap installer, `curl … | bash` (macOS/Linux)
-  and `irm … | iex` (PowerShell, Windows), that fetches the auspex binary for the
-  detected OS/arch from the release CDN, **verifies it fail-closed** (default
-  `verify: cosign` against auspex's pinned release identity; `checksum` and `none`
-  opt-downs), and installs it. Published from this repo's **GitHub Releases** — a
-  second origin, independent of the artifact CDN — and cosign-signed.
-- **MDM verify-gate** — a verify-before-install gate (`mdm/verify-gate.sh` /
-  `.ps1`) for managed installs (macOS Mosyle `.pkg`, Windows Intune `.msi`): the
-  fleet runner verifies the installer and its per-artifact cosign bundle
-  fail-closed against the pinned release identity and **does not install on a
-  verification failure**. Ships with Mosyle / Intune wiring recipes (`mdm/README.md`).
-- **Networking guide** (`docs/networking.md`) — the exact host allow-list each
-  acquisition path needs, the zero-Sigstore-egress verification invariant, and
-  internal-mirror base-URL overrides (`AUSPEX_BASE_URL` / `AUSPEX_COSIGN_BASE_URL`)
-  for egress-restricted / air-gapped fleets.
-- **Cursor cloud agent recipe** (**Installers**) — capture coding-agent activity
+- **Shared** · **Pin-by-digest install** — a `digest` option (`--digest` /
+  `-Digest` for the bootstrap) that pins the **exact artifact by content**: the
+  install fetches it straight from the version-free content-addressed blob store
+  (`<host>/blobs/sha256/<digest>`) and self-verifies `sha256(bytes)==digest`,
+  bypassing version→manifest resolution. A digest is a version-free address (the
+  `@sha256:…`-style pin) that survives a re-tag and needs no cosign/jq — the
+  strongest supply-chain pin for a lockfile or fleet baseline. `version`/`verify`
+  are not consulted for a pinned digest, and a byte mismatch, missing blob, or
+  malformed digest fails closed. Obtain the digest via the by-hand two-hop
+  verification or your org's published pin.
+- **Installers** · **Bootstrap installer** — a piped `curl … | bash`
+  (macOS/Linux) and `irm … | iex` (PowerShell, Windows) installer that fetches
+  the auspex binary for the detected OS/arch from the release CDN, **verifies it
+  fail-closed** (default `verify: cosign` against auspex's pinned release
+  identity; `checksum` and `none` opt-downs), and installs it. Published from
+  this repo's **GitHub Releases** — a second origin, independent of the artifact
+  CDN — and cosign-signed.
+- **Installers** · **MDM verify-gate** — a verify-before-install gate
+  (`mdm/verify-gate.sh` / `.ps1`) for managed installs (macOS Mosyle `.pkg`,
+  Windows Intune `.msi`): the fleet runner verifies the installer and its
+  per-artifact cosign bundle fail-closed against the pinned release identity and
+  **does not install on a verification failure**. Ships with Mosyle / Intune
+  wiring recipes (`mdm/README.md`).
+- **Shared** · **Networking guide** (`docs/networking.md`) — the exact host
+  allow-list each acquisition path needs, the zero-Sigstore-egress verification
+  invariant, and internal-mirror base-URL overrides (`AUSPEX_BASE_URL` /
+  `AUSPEX_COSIGN_BASE_URL`) for egress-restricted / air-gapped fleets.
+- **Installers** · **Cursor cloud agent recipe** — capture coding-agent activity
   from **Cursor cloud agents** (Cursor-managed Linux VMs). The recipe places one
   Cursor hook tier, runs the supervised daemon, and enrolls with Span using a
   team-scoped org token; the engineer's work email is auto-discovered from Cursor's
@@ -69,43 +84,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **Renamed to `auspex-distribution`** (from `auspex-devcontainer-features`) and
-  broadened into the public distribution / trust-surface repo. The Feature's OCI
-  namespace and keyless-signing identity re-anchor to
+- **Shared** · **Repo renamed to `auspex-distribution`** — broadened from
+  `auspex-devcontainer-features` into the public distribution / trust-surface
+  repo. The Feature's OCI namespace and keyless-signing identity re-anchor to
   `ghcr.io/attuned-corp/auspex-distribution/span-auspex`; old URLs redirect, but
   the new coordinates are canonical.
-- **Feature** — `install.sh` now sources **one shared verify recipe**
-  (`src/span-auspex/verify-lib.sh`, also used by the bootstrap and the MDM gate)
-  instead of carrying its own copy of the identity regex / OIDC issuer / cosign
-  pins / trusted root, so there is a single source of trust material. Download
-  verification behavior is at parity (still fail-closed).
-- **Verify recipe (shared)** — `verify: cosign` now **resolves a cosign-signed
-  `version→digest` manifest and installs the artifact by digest** from the
-  content-addressed blob store (`blobs/sha256/<digest>`), self-verifying
-  `sha256(bytes)` against the signed digest — replacing the previous check of the
-  binary's digest against a signed `checksums.txt`. The Feature (**0.4.0**), the
-  `curl | sh` + PowerShell installers, and the MDM gate move together (one
-  recipe). The bash tiers auto-provision a pinned, hash-checked **jq** to parse
-  the manifest (the PowerShell installer uses native JSON, no jq);
-  `AUSPEX_JQ_BASE_URL` mirrors it for air-gapped fleets. `verify: checksum` and
-  `none` are unchanged.
+- **Feature** · **Shared verify recipe** — `install.sh` now sources **one shared
+  verify recipe** (`src/span-auspex/verify-lib.sh`, also used by the bootstrap
+  and the MDM gate) instead of carrying its own copy of the identity regex / OIDC
+  issuer / cosign pins / trusted root, so there is a single source of trust
+  material. Download verification behavior is at parity (still fail-closed).
+- **Shared** · **Verify recipe: install by signed digest** — `verify: cosign`
+  now **resolves a cosign-signed `version→digest` manifest and installs the
+  artifact by digest** from the content-addressed blob store
+  (`blobs/sha256/<digest>`), self-verifying `sha256(bytes)` against the signed
+  digest — replacing the previous check of the binary's digest against a signed
+  `checksums.txt`. The Feature, the `curl | sh` + PowerShell installers, and the
+  MDM gate move together (one recipe). The bash tiers auto-provision a pinned,
+  hash-checked **jq** to parse the manifest (the PowerShell installer uses native
+  JSON, no jq); `AUSPEX_JQ_BASE_URL` mirrors it for air-gapped fleets.
+  `verify: checksum` and `none` are unchanged.
 
 ### Security
 
-- **Closed a version-substitution gap in `verify: cosign`.** Verification is now
-  bound to the requested release tag: the signed manifest's version annotation
-  must equal the tag in the install URL, and the bytes are fetched by the
-  manifest's signed digest — so one release's artifact can no longer be served
-  under a different version's path and pass verification. (The previous
-  digest-membership check against a signed `checksums.txt` was tag-agnostic.)
+- **Shared** · **Version-substitution gap closed in `verify: cosign`** —
+  verification is now bound to the requested release tag: the signed manifest's
+  version annotation must equal the tag in the install URL, and the bytes are
+  fetched by the manifest's signed digest — so one release's artifact can no
+  longer be served under a different version's path and pass verification. (The
+  previous digest-membership check against a signed `checksums.txt` was
+  tag-agnostic.)
 
 ## [2026-08-19]
+
+Published components:
+
+- **span-auspex Feature** — `0.3.0` (GHCR OCI tag/digest)
 
 Initial public availability of the auspex distribution surface.
 
 ### Added
 
-- **Feature `span-auspex` (0.3.0)** — a [Dev Container Feature](https://containers.dev/implementors/features/)
+- **Feature** · **Dev Container Feature `span-auspex`** — a [Dev Container Feature](https://containers.dev/implementors/features/)
   that installs the auspex capture agent into a dev container or cloud agent and
   runs it under the auspex-owned supervisor (the posture for ephemeral
   environments with no OS service manager). Pluggable binary source (`binaryUri`)
