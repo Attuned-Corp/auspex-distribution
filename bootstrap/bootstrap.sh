@@ -45,7 +45,8 @@ usage() {
   cat >&2 <<EOF
 auspex install — fetch, verify, and install the auspex binary.
 
-  --version <tag>     auspex release tag to install (e.g. v0.1.0). Required unless --url/--digest is given.
+  --version <tag>     auspex release tag to install (e.g. v0.1.0). Optional: when omitted (and no
+                      --url/--digest), resolves the CDN's 'latest' pointer to a concrete tag, then verifies.
   --verify <mode>     cosign (default) | checksum | none (ignored with --digest — self-verify is the check)
   --base-url <url>    artifact source base — REQUIRED unless --url (your auspex distribution host / mirror)
   --url <url>         full binary URL (overrides --base-url/--version/os/arch derivation)
@@ -113,9 +114,22 @@ elif [ -z "$BINARY_URL" ]; then
     exit "$AUSPEX_VERIFY_EX_USAGE"
   fi
   if [ -z "$VERSION" ]; then
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --version is required (there is no 'latest' alias on the download host) — e.g. --version v0.1.0. Or pin exact bytes with --digest." >&2
-    usage
-    exit "$AUSPEX_VERIFY_EX_USAGE"
+    # No explicit --version: resolve the CDN's canonical `latest` pointer to a CONCRETE tag, then verify
+    # against that tag. `releases/latest/` is a mutable mirror of the highest published version and carries a
+    # `VERSION` marker naming the tag it mirrors; resolving to the concrete tag keeps verify: cosign
+    # tag-bound (the signed manifest's version annotation must equal the tag in the URL — a bare "latest"
+    # would fail that check). Pass --version <tag> (or --digest) to pin instead.
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: no --version given — resolving latest from ${BASE_URL%/}/releases/latest/VERSION" >&2
+    VERSION="$(curl -fsSL "${BASE_URL%/}/releases/latest/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ -z "$VERSION" ]; then
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: could not resolve 'latest' (no ${BASE_URL%/}/releases/latest/VERSION) — pass --version <tag> (e.g. v0.1.0) or --digest <sha256>" >&2
+      exit "$AUSPEX_VERIFY_EX_FETCH"
+    fi
+    case "$VERSION" in
+      v[0-9]*) ;;
+      *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved 'latest' is not a version tag ('${VERSION}') — refusing" >&2; exit "$AUSPEX_VERIFY_EX_FETCH" ;;
+    esac
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved latest -> ${VERSION}" >&2
   fi
   OS="$(detect_os)"
   ARCH="$(detect_arch)"

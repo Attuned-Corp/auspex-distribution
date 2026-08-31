@@ -50,7 +50,7 @@ case "$BINARY_URI" in
     # A pinned digest addresses the version-free blob, so an empty version is fine then (the blob path is
     # derived from the host root, before /releases/); otherwise a {{version}} template needs a concrete tag.
     if [ -z "$VERSION" ] && [ -z "$DIGEST" ]; then
-      echo "auspex feature: binaryUri uses the {{version}} token but no 'version' (or 'digest') was set — set 'version' to a release tag (e.g. v0.1.0), or set 'digest' to pin by content. There is no 'latest' alias on the download host." >&2
+      echo "auspex feature: binaryUri uses the {{version}} token but no 'version' (or 'digest') was set — set 'version' to a release tag (e.g. v0.1.0), or set 'digest' to pin by content. A concrete tag is required here (cosign verification is tag-bound)." >&2
       exit 1
     fi
     ;;

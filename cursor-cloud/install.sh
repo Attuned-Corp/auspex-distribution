@@ -20,14 +20,18 @@
 # recipe a Runtime Secret or an environment variable both work; only user-scoped values are invisible here.
 # See README):
 #   AUSPEX_BASE_URL       (required, https)  your auspex download host / mirror (provided at onboarding)
-#   AUSPEX_VERSION        (default v0.1.0)    the signed auspex BINARY release the bootstrap installs (--version)
+#   AUSPEX_VERSION        (optional)          pin a signed auspex BINARY release (--version); unset => the bootstrap resolves the CDN 'latest'
 #   AUSPEX_VERIFY         (default cosign)    cosign | checksum | none  (cosign needs github.com egress)
 #   AUSPEX_BOOTSTRAP_TAG  (default latest)    the auspex-distribution BOOTSTRAP release carrying auspex-install.sh
 #   AUSPEX_CLOUD_TOKEN    (Runtime Secret)    team-scoped org token; consumed by the daemon's enrollment
 set -euo pipefail
 
-AUSPEX_VERSION="${AUSPEX_VERSION:-v0.1.0}"
+AUSPEX_VERSION="${AUSPEX_VERSION:-}"   # optional: unset => the bootstrap resolves the CDN 'latest' pointer
 AUSPEX_VERIFY="${AUSPEX_VERIFY:-cosign}"
+# Pass --version only when pinned; unset lets the bootstrap default to the CDN 'latest' (resolved to a
+# concrete signed tag, so verify: cosign stays fail-closed). Built as an array so the empty case adds no arg.
+VERSION_ARGS=()
+[ -n "$AUSPEX_VERSION" ] && VERSION_ARGS=(--version "$AUSPEX_VERSION")
 # The bootstrap installer (auspex-install.sh) is published on its OWN version-resolving release
 # (tagged installers-vX.Y.Z), INDEPENDENT of the auspex binary version — it takes --version to pick the binary.
 # So resolve it from the bootstrap release's `latest/download` alias (or a pinned AUSPEX_BOOTSTRAP_TAG),
@@ -67,9 +71,9 @@ if ! command -v auspex >/dev/null 2>&1; then
   # Run the bootstrap with BASH: the assembled auspex-install.sh uses `set -o pipefail` (a bash builtin), so
   # `sh` (dash on Debian/Ubuntu) aborts with "Illegal option -o pipefail".
   if [ "$PRIVILEGED" -eq 1 ]; then
-    $SUDO bash /tmp/auspex-install.sh --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY" --bin-dir /usr/local/bin
+    $SUDO bash /tmp/auspex-install.sh ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"} --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY" --bin-dir /usr/local/bin
   else
-    bash /tmp/auspex-install.sh --version "$AUSPEX_VERSION" --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY"
+    bash /tmp/auspex-install.sh ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"} --base-url "$AUSPEX_BASE_URL" --verify "$AUSPEX_VERIFY"
   fi
 fi
 
