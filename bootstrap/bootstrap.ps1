@@ -195,7 +195,19 @@ if ($Digest) {
 }
 elseif (-not $Url) {
   if (-not $BaseUrl) { Fail "no artifact source — pass -BaseUrl <url> (your auspex distribution host; see your install instructions) or -Url <full-url>, or set AUSPEX_BASE_URL" 2 }
-  if (-not $Version) { Fail "-Version is required (there is no 'latest' alias on the download host) — e.g. -Version v0.1.0. Or pin exact bytes with -Digest." 2 }
+  if (-not $Version) {
+    # No -Version: resolve the CDN's canonical `latest` pointer to a CONCRETE tag, then verify against it
+    # (keeps verify: cosign tag-bound — a bare "latest" would fail the manifest version-annotation check).
+    # Pass -Version <tag> (or -Digest) to pin instead.
+    $verUrl = "$($BaseUrl.TrimEnd('/'))/releases/latest/VERSION"
+    Write-Host "auspex install: no -Version given — resolving latest from $verUrl"
+    $verTmp = New-TemporaryFile
+    Fetch $verUrl $verTmp.FullName
+    $Version = ((Get-Content -LiteralPath $verTmp.FullName -First 1) + '').Trim()
+    Remove-Item -LiteralPath $verTmp.FullName -Force -ErrorAction SilentlyContinue
+    if (-not $Version -or $Version -notmatch '^v[0-9]') { Fail "resolved 'latest' is not a version tag ('$Version') — pass -Version <tag> or -Digest" 11 }
+    Write-Host "auspex install: resolved latest -> $Version"
+  }
   $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     'AMD64' { 'amd64' }
     'ARM64' { 'arm64' }

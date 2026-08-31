@@ -40,6 +40,11 @@ so there is no Fulcio, Rekor, or TUF traffic — proven mechanically by the netw
 `tests/install-verify-test.sh`. The only egress is fetching the *artifact* and (for first acquisition) the
 *cosign CLI*.
 
+**`latest` resolution:** run without `--version` (and no `--url`/`--digest`), the bootstrap first fetches the
+mutable `releases/latest/VERSION` marker to resolve the concrete tag, then verifies against **that** tag.
+This is the **same origin as the artifact** (CDN, origin #1) — no new host to allow-list, just one extra
+small GET — and the resolved tag flows through the identical cosign path (still fail-closed).
+
 ## Minimal allow-lists
 
 - **Pin-by-digest (leanest):** the **artifact CDN only**, and only its `blobs/sha256/<digest>` path — no

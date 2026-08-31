@@ -40,7 +40,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Published components:
 
 - **span-auspex Feature** — `0.5.0` (GHCR OCI tag/digest)
-- **Install surface** — `installers-v0.1.0` (GitHub Release; `curl | bash` / PowerShell bootstrap, MDM verify-gate, Cursor cloud recipe scripts)
+- **Install surface** — `installers-v0.1.1` (GitHub Release; `curl | bash` / PowerShell bootstrap, MDM verify-gate, Cursor cloud recipe scripts) — supersedes same-day `installers-v0.1.0`
 
 ### Added
 
@@ -84,6 +84,13 @@ Published components:
 
 ### Changed
 
+- **Installers** · **Default to `latest`** — the `curl | bash` / PowerShell bootstrap (and the Cursor cloud
+  recipe) now install the **newest signed release by default**: when no `--version` / `-Version` (and no
+  `--url` / `--digest`) is given, the installer resolves the download host's `latest` pointer
+  (`releases/latest/VERSION`) to a concrete tag and verifies against **that** tag, so `verify: cosign` stays
+  fail-closed (tag-bound — a bare `latest` can't satisfy the signed manifest's version-annotation check).
+  Previously `--version` was mandatory. Pass `--version` / `AUSPEX_VERSION` to pin a release, or `--digest`
+  to pin exact bytes.
 - **Shared** · **Repo renamed to `auspex-distribution`** — broadened from
   `auspex-devcontainer-features` into the public distribution / trust-surface
   repo. The Feature's OCI namespace and keyless-signing identity re-anchor to

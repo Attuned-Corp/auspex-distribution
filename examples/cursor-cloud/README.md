@@ -85,7 +85,7 @@ org-wide credential, and it pairs with a team environment:
 |---|---|---|---|
 | `AUSPEX_CLOUD_TOKEN` | Runtime Secret | **Team** | your org token |
 | `AUSPEX_BASE_URL` | Runtime Secret or env var | **Team** | your auspex download host / mirror (provided at onboarding), e.g. `https://<your-auspex-download-host>` |
-| `AUSPEX_VERSION` | Runtime Secret or env var (optional) | **Team** | the signed release tag (default `v0.1.0`) |
+| `AUSPEX_VERSION` | Runtime Secret or env var (optional) | **Team** | pin a signed release tag; **unset installs the latest** signed release |
 | `AUSPEX_VERIFY` | Runtime Secret or env var (optional) | **Team** | `cosign` (default) · `checksum` · `none` |
 
 `AUSPEX_CLOUD_WORK_EMAIL` is **optional** — leave it unset and the work email is auto-discovered; set it
