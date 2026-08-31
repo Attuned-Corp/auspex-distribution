@@ -1,0 +1,16 @@
+{
+  "//": "auspex Cursor cloud capture — PRIMARY recipe config (no custom image). This is the PER-REPOSITORY",
+  "//0": "form: copy this file into your repo's .cursor/, plus the recipe scripts from src/cursor-cloud/",
+  "//1": "(install.sh + start.sh + optional preflight.sh) into .cursor/, commit, and push to the launch branch.",
+  "//1a": "For the team-level form (no per-repo files), point the environment at the signed Release assets",
+  "//1b": "instead — see examples/cursor-cloud/README.md Option A. Cursor reads .cursor/environment.json from",
+  "//2": "the launch branch; launch a NORMAL agent (the interactive 'Set up agent' button is a different mode).",
+  "//secrets": "Set AUSPEX_CLOUD_TOKEN as a Runtime Secret (team-scoped). Set AUSPEX_BASE_URL (+ optional",
+  "//secrets2": "AUSPEX_VERSION / AUSPEX_VERIFY) as environment variables. The work email is auto-discovered —",
+  "//secrets3": "no per-user secret needed. Egress allowlist + full walkthrough: see README.md.",
+  "//phases": "install runs during Build (post-clone, root/sudo-capable); start runs at each agent run.",
+  "//start": "start runs from an unspecified cwd (not the repo root), so it invokes the launcher install.sh",
+  "//start2": "staged at an absolute path — a repo-relative 'bash .cursor/start.sh' would not resolve.",
+  "install": "bash .cursor/install.sh",
+  "start": "bash \"${AUSPEX_HOME:-$HOME/.auspex}/cloud-start.sh\""
+}

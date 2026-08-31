@@ -11,12 +11,12 @@ that exercises it lives in [`tests/`](./tests). See [`CHANGELOG.md`](./CHANGELOG
 what changed in the Feature and the installers.
 
 > **This repo is auspex's public distribution / trust surface.** Besides the Dev Container Feature it hosts
-> the standalone **`curl | sh` / PowerShell installers** ([`bootstrap/`](./bootstrap)) and the shared
+> the standalone **`curl | bash` / PowerShell installers** ([`bootstrap/`](./bootstrap)) and the shared
 > **verify recipe + Sigstore trust anchor** ([`src/span-auspex/verify-lib.sh`](./src/span-auspex/verify-lib.sh)
 > + `trusted_root.json`) — a deliberate **second origin, independent of the artifact CDN**. All three
 > consumers (Feature, bootstrap, MDM gate) share the one recipe; see [Network access](./docs/networking.md).
 
-## Installing outside a dev container (`curl | sh` / PowerShell)
+## Installing outside a dev container (`curl | bash` / PowerShell)
 
 For laptops / CI / non-devcontainer hosts, a piped installer fetches the raw binary for your OS/arch **from
 your auspex distribution host** (passed via `--base-url`), **verifies it fail-closed** against the pinned
@@ -28,7 +28,7 @@ pluggable `binaryUri`); your install instructions provide the exact `--base-url`
 ```bash
 # macOS / Linux
 curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.sh \
-  | sh -s -- --version v0.1.0 --base-url <your-auspex-distribution-host>
+  | bash -s -- --version v0.1.0 --base-url <your-auspex-distribution-host>
 ```
 
 ```powershell
@@ -49,7 +49,7 @@ To pin the **exact bytes** (version-free — survives a re-tag, needs no cosign/
 ```bash
 # macOS / Linux — install the artifact addressed by its own sha256, straight from the blob store
 curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.sh \
-  | sh -s -- --base-url <your-auspex-distribution-host> --digest sha256:<64-hex>
+  | bash -s -- --base-url <your-auspex-distribution-host> --digest sha256:<64-hex>
 ```
 
 ```powershell

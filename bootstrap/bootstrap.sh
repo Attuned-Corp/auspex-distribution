@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# auspex curl|sh bootstrap (macOS/Linux) — fetch + fail-closed verify + place on PATH, the portable
+# auspex curl|bash bootstrap (macOS/Linux) — fetch + fail-closed verify + place on PATH, the portable
 # non-devcontainer acquisition path. Served from this repo's GitHub Releases as a SELF-CONTAINED assembled
 # script (origin #2, independent of the artifact CDN); see bootstrap/assemble.sh. The artifact itself comes
 # from the CDN (origin #1). The script's OWN bytes are trusted via TLS + origin (a piped script cannot
@@ -10,7 +10,9 @@
 # assembler sets _AUSPEX_VERIFY_LIB_SOURCED + AUSPEX_TRUSTED_ROOT), so this block is skipped. Either way
 # there is a single verifier, not a bootstrap-specific copy.
 #
-# Usage (piped):  curl -fsSL <release-asset-url>/auspex-install.sh | sh -s -- --version v0.1.0
+# Usage (piped):  curl -fsSL <release-asset-url>/auspex-install.sh | bash -s -- --version v0.1.0
+# The assembled script uses bash-only constructs (indirect ${!pinvar} expansion, BASH_SOURCE), so pipe to
+# `bash`, not `sh` — under dash (Debian/Ubuntu /bin/sh) it aborts on `set -o pipefail`.
 # Or download-then-run for the security-conscious (verify the script's own detached sig first; README).
 
 set -euo pipefail

@@ -102,3 +102,18 @@ emit_bash "$BOOT" "$OUT"      "Self-contained auspex installer for GitHub Releas
 emit_bash "$GATE" "$GATE_OUT" "Self-contained auspex MDM verify-before-install gate (AC7)."
 emit_ps   "$BOOT_PS" "$OUT_PS"
 emit_ps   "$GATE_PS" "$GATE_OUT_PS"
+
+# Cursor cloud recipe scripts (src/cursor-cloud/) — staged into dist/ so the Release signs + ships them as
+# first-class assets (parity with the Dev Container Feature). Unlike the installers above they need NO
+# assembly: they carry no inlined verify recipe or trust root — the binary fetch DELEGATES to the signed
+# auspex-install.sh bootstrap (which self-verifies against the embedded anchor). So they are copied verbatim
+# from source, published under a cursor-cloud- prefix, and consumed from releases/latest/download/.
+CC_SRC="$ROOT/src/cursor-cloud"
+for s in install start preflight; do
+  src="$CC_SRC/$s.sh"
+  [ -f "$src" ] || { echo "assemble: missing input $src" >&2; exit 1; }
+  dst="$OUT_DIR/cursor-cloud-$s.sh"
+  cp "$src" "$dst"
+  chmod 0755 "$dst"
+  echo "assemble: wrote $dst ($(wc -c < "$dst" | tr -d ' ') bytes)"
+done
