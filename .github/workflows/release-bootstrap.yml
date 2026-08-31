@@ -3,7 +3,7 @@ name: Release install surface
 # Cut a GitHub Release carrying the SELF-CONTAINED install surface (origin #2, independent of the artifact
 # CDN) assembled from the ONE verify recipe + embedded trust anchor: the curl|sh + PowerShell bootstrap
 # installers, the macOS/Windows MDM verify-before-install gate (mdm/), AND the Cursor cloud recipe scripts
-# (src/cursor-cloud/ — cosign-signed here, consumed from releases/latest/download/). Manual only
+# (cursor-cloud/ — cosign-signed here, consumed from releases/latest/download/). Manual only
 # (workflow_dispatch): publishing install surface is a human go-live decision, and — because the bootstrap
 # is VERSION-RESOLVING (resolves the auspex release at run time / takes --version) — the repo needs a new
 # release only when the scripts or the (rarely-changing) trust anchor change, NOT per auspex release.

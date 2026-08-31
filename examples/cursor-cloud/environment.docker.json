@@ -3,7 +3,7 @@
   "//1": "The binary is fetched + verified at BUILD (baked into the image), so the per-agent install is faster",
   "//2": "and needs no download egress at run time. Placement + enrollment still happen at install.",
   "//activate": "To use THIS variant instead of the primary: copy examples/cursor-cloud/Dockerfile +",
-  "//activate2": "src/cursor-cloud/{install,start}.sh into your repo's .cursor/, then",
+  "//activate2": "cursor-cloud/{install,start}.sh into your repo's .cursor/, then",
   "//activate3": "`cp .cursor/environment.docker.json .cursor/environment.json`, commit, and push to the launch",
   "//activate4": "branch. Set AUSPEX_BASE_URL as a build arg (see Dockerfile).",
   "//start": "start runs from an unspecified cwd (not the repo root), so it invokes the launcher install.sh",
