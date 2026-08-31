@@ -61,20 +61,36 @@ every repo that doesn't define its own.
 
 ### Option B — per-repository
 
-Copy the config + the recipe scripts (from `cursor-cloud/`) into the repo's `.cursor/`:
+Commit just a `.cursor/environment.json` that fetches the **same signed recipe** — no scripts are vendored,
+so an upstream `install.sh` / `start.sh` fix flows in automatically (nothing to keep in sync):
 
 ```bash
 mkdir -p .cursor
 cp examples/cursor-cloud/environment.json .cursor/environment.json
-cp cursor-cloud/install.sh .cursor/install.sh
-cp cursor-cloud/start.sh .cursor/start.sh
-cp cursor-cloud/preflight.sh .cursor/preflight.sh   # optional
 ```
 
-For the Dockerfile variant instead: also copy `examples/cursor-cloud/Dockerfile`, then
-`cp examples/cursor-cloud/environment.docker.json .cursor/environment.json`. Then **commit and push** to the
-branch you'll launch the agent on — Cursor reads `.cursor/environment.json` from the launch branch, so an
-uncommitted file is not seen.
+The committed `environment.json` runs the same signed Release assets as Option A, just from the repo so it
+overrides the team environment:
+
+```json
+{
+  "install": "curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-install.sh | bash",
+  "start": "curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-start.sh | bash"
+}
+```
+
+For the Dockerfile variant instead — the one case that must vendor files, since it bakes the verified binary
+into the image at build — also copy the scripts and Dockerfile, then swap in its config:
+
+```bash
+cp examples/cursor-cloud/Dockerfile .cursor/Dockerfile
+cp cursor-cloud/install.sh .cursor/install.sh
+cp cursor-cloud/start.sh .cursor/start.sh
+cp examples/cursor-cloud/environment.docker.json .cursor/environment.json
+```
+
+Then **commit and push** to the branch you'll launch the agent on — Cursor reads `.cursor/environment.json`
+from the launch branch, so an uncommitted file is not seen.
 
 ### Then: secret + settings, and launch
 
@@ -109,11 +125,12 @@ hardcoded here; see [`docs/networking.md`](../../docs/networking.md) for the ful
 
 - your **Span capture ingest host** (the enrollment / egress endpoint from onboarding) — captured events go here.
 - your **`AUSPEX_BASE_URL` download host** — the signed binary artifact.
-- `github.com` + `objects.githubusercontent.com` — the Release assets (the `auspex-install.sh` bootstrap and,
-  for the **team-level** path in Option A, this recipe's `cursor-cloud-*.sh` scripts; Release-asset downloads
-  redirect to `objects.githubusercontent.com`), and — only when `AUSPEX_VERIFY=cosign` — the pinned cosign/jq
-  CLIs. Use `AUSPEX_VERIFY=checksum` to drop the cosign egress (SHA-256 integrity only). The per-repository
-  path (Option B) commits the scripts, so it doesn't fetch them at run time.
+- `github.com` + `objects.githubusercontent.com` — the Release assets (the `auspex-install.sh` bootstrap and
+  this recipe's `cursor-cloud-*.sh` scripts, which both the team-level path in Option A and the per-repository
+  path in Option B fetch at run time; Release-asset downloads redirect to `objects.githubusercontent.com`),
+  and — only when `AUSPEX_VERIFY=cosign` — the pinned cosign/jq CLIs. Use `AUSPEX_VERIFY=checksum` to drop the
+  cosign egress (SHA-256 integrity only). Only the Dockerfile variant vendors the scripts, so it alone skips
+  the run-time script fetch.
 
 ## Verifying the recipe
 
@@ -136,7 +153,8 @@ cosign verify-blob --bundle cursor-cloud-install.sh.cosign.bundle \
 
 ```bash
 auspex status --verbose --check-token   # daemon up · placement · token valid · single tier · delivery
-bash .cursor/preflight.sh               # + the two cloud-env facts: token injected, email resolved
+# + the two cloud-env facts (token injected, email resolved):
+curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-preflight.sh | bash
 ```
 
 A healthy setup shows the daemon reachable, `capture_wiring` passing, `token_validity` OK, and a single
@@ -163,10 +181,11 @@ placement tier (no double-capture).
   which enrolls from `AUSPEX_CLOUD_TOKEN` (+ the resolved work email) at run time and arms the cold-start
   capture relax itself — so no install-time enrollment step is needed, and nothing needs to run as a
   non-root user.
-- **Run-phase launcher staged at an absolute path.** Cursor's `start` command runs from an unspecified
-  working directory (typically `$HOME`, not the repo root), so `install.sh` copies `start.sh` to
-  `$HOME/.auspex/cloud-start.sh` and the `start` hook invokes that absolute path. (The team-level curl|bash
-  path re-fetches `start.sh` each run, so it doesn't rely on the staged copy.)
+- **Run-phase launcher.** Cursor's `start` command runs from an unspecified working directory (typically
+  `$HOME`, not the repo root). The primary recipe (Option A and the fetch-based Option B) re-fetches
+  `start.sh` via `curl|bash` each run, so the working directory is irrelevant. The Dockerfile variant, which
+  vendors the scripts instead, relies on `install.sh` staging `start.sh` at `$HOME/.auspex/cloud-start.sh` so
+  its `start` hook can invoke it by absolute path.
 - **Attribution with no per-user secret.** `start.sh` curls the agent metadata socket
   (`/run/cursor/api.sock` → `/v1/meta-data/owner/user-email`) and exports `AUSPEX_CLOUD_WORK_EMAIL`, which
   auspex's enrollment consumes. An explicit secret (if you set one) takes precedence; a socket failure is
