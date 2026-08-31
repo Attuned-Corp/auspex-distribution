@@ -14,7 +14,7 @@ daemon, and enrolls with Span. It needs **one secret** (a team-scoped org token)
 ## What's here
 
 This directory holds the **consumer example** — the Cursor environment config you point at the recipe. The
-executable recipe itself lives in [`src/cursor-cloud/`](../../src/cursor-cloud/) and is **cosign-signed and
+executable recipe itself lives in [`cursor-cloud/`](../../cursor-cloud/) and is **cosign-signed and
 published as GitHub Release assets** (`cursor-cloud-install.sh` / `-start.sh` / `-preflight.sh`), so the
 recommended install fetches it from an immutable, signed URL — the same posture as the Dev Container Feature.
 
@@ -23,7 +23,7 @@ recommended install fetches it from an immutable, signed URL — the same postur
 | `environment.json` | **Primary** recipe config (no custom image). `install` + `start` hooks. |
 | `environment.docker.json` + `Dockerfile` | **Variant** for teams already using a custom base image (bakes the binary at build). |
 
-| Published asset (from `src/cursor-cloud/`) | Role |
+| Published asset (from `cursor-cloud/`) | Role |
 |---|---|
 | `cursor-cloud-install.sh` | Build phase: fetch + verify the signed binary, place one hook tier (`auspex hooks install --system`). |
 | `cursor-cloud-start.sh` | Run phase: derive the work email from the metadata socket, launch the supervised daemon (which enrolls). |
@@ -61,14 +61,14 @@ every repo that doesn't define its own.
 
 ### Option B — per-repository
 
-Copy the config + the recipe scripts (from `src/cursor-cloud/`) into the repo's `.cursor/`:
+Copy the config + the recipe scripts (from `cursor-cloud/`) into the repo's `.cursor/`:
 
 ```bash
 mkdir -p .cursor
 cp examples/cursor-cloud/environment.json .cursor/environment.json
-cp src/cursor-cloud/install.sh .cursor/install.sh
-cp src/cursor-cloud/start.sh .cursor/start.sh
-cp src/cursor-cloud/preflight.sh .cursor/preflight.sh   # optional
+cp cursor-cloud/install.sh .cursor/install.sh
+cp cursor-cloud/start.sh .cursor/start.sh
+cp cursor-cloud/preflight.sh .cursor/preflight.sh   # optional
 ```
 
 For the Dockerfile variant instead: also copy `examples/cursor-cloud/Dockerfile`, then

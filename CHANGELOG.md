@@ -77,7 +77,7 @@ Published components:
   team-scoped org token; the engineer's work email is auto-discovered from Cursor's
   agent metadata socket, so no per-user secret is needed. The scripts
   (`cursor-cloud-install.sh` / `-start.sh` / `-preflight.sh`, sourced from
-  `src/cursor-cloud/`) are **cosign-signed and published as GitHub Release assets**,
+  `cursor-cloud/`) are **cosign-signed and published as GitHub Release assets**,
   consumed from `releases/latest/download/` — the same trust posture as the Dev
   Container Feature. A consumer example (team-level and per-repository, plus a
   custom-image Dockerfile variant) lives in `examples/cursor-cloud/`.

@@ -1,6 +1,6 @@
 {
   "//": "auspex Cursor cloud capture — PRIMARY recipe config (no custom image). This is the PER-REPOSITORY",
-  "//0": "form: copy this file into your repo's .cursor/, plus the recipe scripts from src/cursor-cloud/",
+  "//0": "form: copy this file into your repo's .cursor/, plus the recipe scripts from cursor-cloud/",
   "//1": "(install.sh + start.sh + optional preflight.sh) into .cursor/, commit, and push to the launch branch.",
   "//1a": "For the team-level form (no per-repo files), point the environment at the signed Release assets",
   "//1b": "instead — see examples/cursor-cloud/README.md Option A. Cursor reads .cursor/environment.json from",
