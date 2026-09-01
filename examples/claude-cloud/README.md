@@ -1,12 +1,12 @@
 # auspex — Claude Code cloud agent capture
 
-> ⚠️ **EXPERIMENTAL — not yet supported for production.** The capture path is proven end-to-end, but Claude
-> cloud environments inject **no session secrets**, and the only way this recipe currently gets the org token
-> in is by placing `AUSPEX_CLOUD_TOKEN` **inline in the setup-script config** — which is **not an acceptable
-> production posture** (hard-coding the token in the environment config, or committing it to the repo, both
-> expose an org credential). We are **not advertising Claude cloud support** until a secure token-provisioning
-> mechanism is decided (see the workspace `DECISIONS.md` "Claude cloud capture — token provisioning"). Treat
-> this directory as a working reference for the *capture* mechanics, not an install guide.
+> ⚠️ **DISCLAIMER — the org token is hard-coded inline in the setup-script config.** Claude cloud environments
+> **do not support secrets**, and the setup script is the only config surface, so this recipe requires placing
+> `AUSPEX_CLOUD_TOKEN` **inline in the environment's setup-script config**. That token is an **OTel ingest auth
+> token**: if it is exposed, it only permits **posting arbitrary telemetry payloads to the OTel ingest
+> endpoint** — it grants **no read access to captured data and no other authentication**. So the blast radius of
+> a leak is bounded to spurious event ingestion; still treat the setup config as sensitive and rotate the token
+> on suspected exposure.
 
 Capture coding-agent activity (shell / file / tool events + token usage) from **Claude Code cloud agents** —
 the Anthropic-hosted Linux VMs behind *Claude Code on the web*, `claude --cloud`, the Claude tag, and routines
@@ -57,11 +57,13 @@ as GitHub Release assets**, so setup fetches it from an immutable, signed URL.
 
 ## Install
 
-### Step 1 — set the environment setup script
+### Step 1 — create a default cloud environment with this setup script
 
-Claude cloud injects **no session secrets**, so all config is supplied **inline** in the setup script (the only
-config surface). Set your environment's **setup script** to export the config, then fetch + run the signed
-installer:
+Claude does **not** support committing environment setup to your repository, and it injects **no session
+secrets** — so configure this once at the **environment** level, not per-repo. Create (or edit) a **cloud
+environment**, set its **setup script** to the block below (all config is supplied **inline** there — the only
+config surface), and make it your **default** environment so every new chat/session picks it up automatically
+with no per-session steps:
 
 ```bash
 export AUSPEX_BASE_URL="https://<your-auspex-download-host>"
@@ -97,7 +99,9 @@ The setup script reads these from its environment (export them, as above — the
 - Without any resolved work email, capture still runs — events are just **unattributed**.
 
 > **Posture note.** Because there are no session secrets, the org token lives in the environment's
-> setup-script config (admin-controlled). Treat that config as sensitive; rotate the org token if it leaks.
+> setup-script config (admin-controlled). It's an **OTel ingest token** — a leak only allows posting telemetry
+> payloads, never reading captured data — so the blast radius is bounded; still treat the config as sensitive
+> and rotate the token if it leaks.
 
 ### Step 3 — allowlist egress
 
@@ -114,8 +118,9 @@ Claude cloud's default **`Trusted`** network access excludes the Span ingest hos
 
 ### Step 4 — launch a normal cloud session
 
-Launch a Claude cloud agent the way you normally would; the managed hooks + `SessionStart` daemon launch are
-picked up automatically — **no bespoke base image**.
+Launch a Claude cloud agent the way you normally would. Because the recipe lives in your **default** cloud
+environment, every new chat/session inherits it — the managed hooks + `SessionStart` daemon launch are picked
+up automatically, with **no bespoke base image** and nothing to commit to the repo.
 
 ## Verifying the recipe
 
@@ -180,5 +185,6 @@ placement tier (no double-capture).
 - **Teardown:** a burst of events in the final moments before the VM is torn down may not flush.
 - **Owner-scoped attribution:** the resolved email is the dispatching human (`CLAUDE_CODE_USER_EMAIL` / git
   identity / baked fallback), so a multi-person agent attributes to that identity.
-- **Token in setup config:** with no session secrets, the org token lives in the environment's setup-script
-  config — treat it as sensitive and rotate on leak.
+- **Token in setup config:** with no session secrets, the org token is hard-coded inline in the environment's
+  setup-script config. It's a write-only **OTel ingest token** (a leak only permits posting telemetry, never
+  reading data), so the blast radius is bounded — still treat the config as sensitive and rotate on leak.
