@@ -35,6 +35,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-09-01]
+
+Published components:
+
+- **Install surface** — `installers-v0.1.2` (GitHub Release; adds the Claude cloud
+  recipe scripts alongside the existing `curl | bash` / PowerShell bootstrap, MDM
+  verify-gate, and Cursor cloud recipe)
+
 ### Added
 
 - **Installers** · **Claude cloud capture recipe** — a `claude-cloud/` recipe
@@ -45,13 +53,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`/etc/claude-code/managed-settings.d/`), **provisions the org token into
   auspex's identity file** (`auspex auth set`), and wires a `SessionStart` hook
   that launches the supervised daemon in-session (which enrolls from that identity
-  file). Claude cloud injects **no session secrets**, so all config is supplied
-  inline in the setup script; attribution resolves Claude's per-session
-  `CLAUDE_CODE_USER_EMAIL` (then `git config user.email`, then a baked
-  `AUSPEX_CLOUD_WORK_EMAIL` fallback). Token usage /
-  turn enrichment / sub-agent metrics ride along via auspex's built-in tailer. Scripts
-  are cosign-signed Release assets (`claude-cloud-install/session-start/preflight.sh`)
-  consumed from `releases/latest/download/`. See `examples/claude-cloud/README.md`.
+  file). Claude cloud injects **no session secrets** and doesn't support committing
+  setup to the repo, so config is supplied inline in the setup script of a
+  **default cloud environment**; the org token is a **write-only OTel-ingest token**
+  (a leak only permits posting telemetry — bounded blast radius; rotate on leak).
+  Attribution resolves Claude's per-session `CLAUDE_CODE_USER_EMAIL` (then
+  `git config user.email`, then a baked `AUSPEX_CLOUD_WORK_EMAIL` fallback). Token
+  usage / turn enrichment / sub-agent metrics ride along via auspex's built-in
+  tailer. Scripts are cosign-signed Release assets
+  (`claude-cloud-install/session-start/preflight.sh`) consumed from
+  `releases/latest/download/`. See `examples/claude-cloud/README.md`.
 
 ## [2026-08-31]
 
