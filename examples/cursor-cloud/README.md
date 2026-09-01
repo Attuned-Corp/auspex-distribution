@@ -43,13 +43,13 @@ Point its commands at the **signed Release assets** — no per-repository files 
 - **Install command:**
 
 ```bash
-curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-install.sh | bash
+curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-install.sh -o /tmp/cursor-cloud-install.sh && bash /tmp/cursor-cloud-install.sh
 ```
 
 - **Start command:**
 
 ```bash
-curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-start.sh | bash
+curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-start.sh -o /tmp/cursor-cloud-start.sh && bash /tmp/cursor-cloud-start.sh
 ```
 
 `latest/download` tracks the newest non-prerelease release; pin a specific tag
@@ -74,8 +74,8 @@ overrides the team environment:
 
 ```json
 {
-  "install": "curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-install.sh | bash",
-  "start": "curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-start.sh | bash"
+  "install": "curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-install.sh -o /tmp/cursor-cloud-install.sh && bash /tmp/cursor-cloud-install.sh",
+  "start": "curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-start.sh -o /tmp/cursor-cloud-start.sh && bash /tmp/cursor-cloud-start.sh"
 }
 ```
 
@@ -154,7 +154,7 @@ cosign verify-blob --bundle cursor-cloud-install.sh.cosign.bundle \
 ```bash
 auspex status --verbose --check-token   # daemon up · placement · token valid · single tier · delivery
 # + the two cloud-env facts (token injected, email resolved):
-curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-preflight.sh | bash
+curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/cursor-cloud-preflight.sh -o /tmp/cursor-cloud-preflight.sh && bash /tmp/cursor-cloud-preflight.sh
 ```
 
 A healthy setup shows the daemon reachable, `capture_wiring` passing, `token_validity` OK, and a single
