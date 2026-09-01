@@ -117,3 +117,16 @@ for s in install start preflight; do
   chmod 0755 "$dst"
   echo "assemble: wrote $dst ($(wc -c < "$dst" | tr -d ' ') bytes)"
 done
+
+# Claude cloud recipe scripts (claude-cloud/) — same footing as cursor-cloud above: verbatim copies (no
+# inlined verify recipe/trust root — the binary fetch delegates to the signed auspex-install.sh bootstrap),
+# published under a claude-cloud- prefix and consumed from releases/latest/download/.
+CLC_SRC="$ROOT/claude-cloud"
+for s in install session-start preflight; do
+  src="$CLC_SRC/$s.sh"
+  [ -f "$src" ] || { echo "assemble: missing input $src" >&2; exit 1; }
+  dst="$OUT_DIR/claude-cloud-$s.sh"
+  cp "$src" "$dst"
+  chmod 0755 "$dst"
+  echo "assemble: wrote $dst ($(wc -c < "$dst" | tr -d ' ') bytes)"
+done

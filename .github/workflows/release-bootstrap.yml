@@ -7,6 +7,7 @@ name: Release install surface
 # (workflow_dispatch): publishing install surface is a human go-live decision, and — because the bootstrap
 # is VERSION-RESOLVING (resolves the auspex release at run time / takes --version) — the repo needs a new
 # release only when the scripts or the (rarely-changing) trust anchor change, NOT per auspex release.
+# Also carries the Claude cloud recipe scripts (claude-cloud/ — cosign-signed here, consumed the same way).
 #
 # Consumers fetch the immutable per-tag asset, or the mutable `latest/download` alias GitHub maintains for
 # the newest non-prerelease release:
@@ -73,12 +74,13 @@ jobs:
           chmod 0755 /usr/local/bin/cosign
           cosign version
 
-      - name: Sign installers + gate + cursor-cloud recipe (cosign keyless) + checksums
+      - name: Sign installers + gate + cursor-cloud + claude-cloud recipes (cosign keyless) + checksums
         run: |
           set -euo pipefail
           cd dist
           assets=(auspex-install.sh auspex-install.ps1 auspex-verify-gate.sh auspex-verify-gate.ps1 \
-                  cursor-cloud-install.sh cursor-cloud-start.sh cursor-cloud-preflight.sh)
+                  cursor-cloud-install.sh cursor-cloud-start.sh cursor-cloud-preflight.sh \
+                  claude-cloud-install.sh claude-cloud-session-start.sh claude-cloud-preflight.sh)
           for f in "${assets[@]}"; do
             cosign sign-blob --yes --bundle "${f}.cosign.bundle" "$f"
           done
@@ -91,7 +93,7 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
-          flags=(--title "$TAG" --notes "Self-contained auspex install surface (curl|sh + PowerShell bootstrap, MDM verify-before-install gate) plus the signed Cursor cloud recipe scripts (cursor-cloud-install/start/preflight.sh), assembled from the shared verify recipe. See README → Installing outside a dev container, mdm/README.md, and examples/cursor-cloud/README.md.")
+          flags=(--title "$TAG" --notes "Self-contained auspex install surface (curl|sh + PowerShell bootstrap, MDM verify-before-install gate) plus the signed Cursor cloud recipe scripts (cursor-cloud-install/start/preflight.sh) and Claude cloud recipe scripts (claude-cloud-install/session-start/preflight.sh), assembled from the shared verify recipe. See README → Installing outside a dev container, mdm/README.md, examples/cursor-cloud/README.md, and examples/claude-cloud/README.md.")
           [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
           gh release create "$TAG" "${flags[@]}" \
             dist/auspex-install.sh \
@@ -108,6 +110,12 @@ jobs:
             dist/cursor-cloud-start.sh.cosign.bundle \
             dist/cursor-cloud-preflight.sh \
             dist/cursor-cloud-preflight.sh.cosign.bundle \
+            dist/claude-cloud-install.sh \
+            dist/claude-cloud-install.sh.cosign.bundle \
+            dist/claude-cloud-session-start.sh \
+            dist/claude-cloud-session-start.sh.cosign.bundle \
+            dist/claude-cloud-preflight.sh \
+            dist/claude-cloud-preflight.sh.cosign.bundle \
             dist/checksums.txt
           {
             echo "### Bootstrap installers published"
