@@ -42,11 +42,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `preflight.sh`) that captures **Claude Code cloud agents** (Claude Code on the
   web / `claude --cloud` / tag / routines). The environment setup script fetches +
   cosign-verifies the signed binary, places one **managed** hook tier
-  (`/etc/claude-code/managed-settings.d/`), and wires a `SessionStart` hook that
-  launches the supervised daemon in-session (where the injected org token is
-  readable — the setup script can't see it). Attribution uses an injected
-  `AUSPEX_CLOUD_WORK_EMAIL` (Claude has no metadata socket); token usage / turn
-  enrichment / sub-agent metrics ride along via auspex's built-in tailer. Scripts
+  (`/etc/claude-code/managed-settings.d/`), **provisions the org token into
+  auspex's identity file** (`auspex auth set`), and wires a `SessionStart` hook
+  that launches the supervised daemon in-session (which enrolls from that identity
+  file). Claude cloud injects **no session secrets**, so all config is supplied
+  inline in the setup script; attribution resolves Claude's per-session
+  `CLAUDE_CODE_USER_EMAIL` (then `git config user.email`, then a baked
+  `AUSPEX_CLOUD_WORK_EMAIL` fallback). Token usage /
+  turn enrichment / sub-agent metrics ride along via auspex's built-in tailer. Scripts
   are cosign-signed Release assets (`claude-cloud-install/session-start/preflight.sh`)
   consumed from `releases/latest/download/`. See `examples/claude-cloud/README.md`.
 

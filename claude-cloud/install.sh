@@ -6,21 +6,26 @@
 # and stages its launcher. Idempotent — safe to re-run.
 #
 # Why the run phase is a HOOK, not this script: Claude cloud exposes only this build-time setup script, which
-# runs BEFORE the session and therefore CANNOT read the session-injected AUSPEX_CLOUD_TOKEN. A SessionStart
-# hook runs IN-SESSION (it can read the token), so the daemon must launch from there — not here. This script
-# only installs + wires; `session-start.sh` (the launcher) enrolls + supervises at each session (see step 4).
+# runs BEFORE the session. It can't start a long-lived daemon that survives into the session, so a SessionStart
+# hook launches `auspex daemon --supervise` at each session. Enrollment does NOT need a session secret: this
+# script PROVISIONS the org token into auspex's identity file (step 3, via the shipped `auspex auth set`), and
+# the in-session daemon enrolls from that file. `session-start.sh` (the launcher) resolves the work email +
+# supervises at each session (see step 5).
 #
 # PRIVILEGE: Claude cloud runs the session (and typically this setup) as ROOT (HOME=/root), so the decision-
 # grade MANAGED tier (/etc/claude-code/managed-settings.d/, the only tier that fires under Claude's
 # allowManagedHooksOnly lockdown) is the primary. Privileged steps go through a resolved $SUDO: empty when
 # already root, `sudo -E` when non-root-but-passwordless-sudo, else unavailable (→ user-tier ~/.claude fallback).
 #
-# Env it reads (inject as team/environment secrets the setup phase can see):
-#   AUSPEX_BASE_URL       (required, https)  your auspex download host / mirror (provided at onboarding)
-#   AUSPEX_VERSION        (optional)          pin a signed auspex BINARY release (--version); unset => CDN 'latest'
-#   AUSPEX_VERIFY         (default cosign)    cosign | checksum | none  (cosign needs github.com egress)
-#   AUSPEX_BOOTSTRAP_TAG  (default latest)    the auspex-distribution release carrying the recipe + installer
-#   AUSPEX_CLOUD_TOKEN    (session secret)    team/session-scoped org token; read by the SessionStart launcher
+# Claude cloud environments inject NO session secrets, and this setup script can't read session env — so every
+# value below is supplied INLINE to this script (in the environment's setup-script config, the only config
+# surface). The org token is written into auspex's identity file HERE (step 3); no session secret is involved.
+#   AUSPEX_BASE_URL         (required, https)  your auspex download host / mirror (provided at onboarding)
+#   AUSPEX_CLOUD_TOKEN      (required)         org token (span_…); provisioned into the identity file via `auth set`
+#   AUSPEX_CLOUD_WORK_EMAIL (optional)         baked attribution fallback; session prefers CLAUDE_CODE_USER_EMAIL
+#   AUSPEX_VERSION          (optional)         pin a signed auspex BINARY release (--version); unset => CDN 'latest'
+#   AUSPEX_VERIFY           (default cosign)   cosign | checksum | none  (cosign needs github.com egress)
+#   AUSPEX_BOOTSTRAP_TAG    (default latest)   the auspex-distribution release carrying the recipe + installer
 set -euo pipefail
 
 AUSPEX_VERSION="${AUSPEX_VERSION:-}"   # optional: unset => the bootstrap resolves the CDN 'latest' pointer
@@ -85,7 +90,36 @@ else
   "$AUSPEX_BIN" hooks install
 fi
 
-# 3) Stage the SessionStart LAUNCHER at a stable absolute path (baked into the hook in step 4). Prefer a local
+# 3) PROVISION the org token (+ optional baked work email) into auspex's identity file, so the in-session daemon
+#    enrolls with NO session secret. Claude cloud injects no secrets and this setup script can't read session
+#    env, so the token is supplied inline to THIS script and written to the user-tier identity file the daemon
+#    reads (resolution is env > managed > USER; the shipped `auth set` writes the user tier). We target root's
+#    home (HOME=/root) because the session daemon runs as root and reads /root/.auspex/run/identity.json. The
+#    write is atomic + preserve-on-omit, so session-start.sh can later refine the work email without re-passing
+#    the token. Absence is non-fatal (capture still wires) but WARNS loudly — without a token nothing enrolls.
+#    Work email here is a BEST-EFFORT baked fallback: AUSPEX_CLOUD_WORK_EMAIL, else CLAUDE_CODE_USER_EMAIL IF the
+#    platform already exports it at setup (it may be session-only — guarded, so unset just means no baked email;
+#    session-start.sh resolves the authoritative CLAUDE_CODE_USER_EMAIL per session regardless).
+BAKED_EMAIL="${AUSPEX_CLOUD_WORK_EMAIL:-${CLAUDE_CODE_USER_EMAIL:-}}"
+provision_identity() {
+  email_args=""
+  [ -n "$BAKED_EMAIL" ] && email_args="--email $BAKED_EMAIL"
+  # shellcheck disable=SC2086 # email_args is a deliberate 0-or-2 word split, never user-quoted text
+  if [ "$PRIVILEGED" -eq 1 ]; then
+    ${SUDO:+sudo} env HOME=/root "$AUSPEX_BIN" auth set --token "$AUSPEX_CLOUD_TOKEN" $email_args
+  else
+    "$AUSPEX_BIN" auth set --token "$AUSPEX_CLOUD_TOKEN" $email_args
+  fi
+}
+if [ -n "${AUSPEX_CLOUD_TOKEN:-}" ]; then
+  provision_identity >/dev/null
+  echo "auspex(setup): provisioned org token${BAKED_EMAIL:+ + baked work email ($BAKED_EMAIL)} into the identity file"
+else
+  echo "auspex(setup): WARNING no AUSPEX_CLOUD_TOKEN provided — the daemon will NOT enroll (no Span delivery)." >&2
+  echo "auspex(setup): set AUSPEX_CLOUD_TOKEN inline in the setup script (Claude cloud injects no session secrets)." >&2
+fi
+
+# 4) Stage the SessionStart LAUNCHER at a stable absolute path (baked into the hook in step 5). Prefer a local
 #    sibling (baked image / e2e checkout); else fetch the signed recipe asset from the release. Privileged →
 #    a machine-wide dir the root session can read; unprivileged → the per-user auspex home.
 if SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"; then :; else SCRIPT_DIR=""; fi
@@ -107,8 +141,9 @@ fi
 $SUDO chmod 0755 "$LAUNCHER"
 echo "auspex(setup): staged SessionStart launcher at $LAUNCHER"
 
-# 4) Wire the SessionStart DAEMON-LAUNCH hook so `auspex daemon --supervise` starts IN-SESSION (where the
-#    injected token is readable). This is a SEPARATE hook from auspex's own capture SessionStart entry —
+# 5) Wire the SessionStart DAEMON-LAUNCH hook so `auspex daemon --supervise` starts IN-SESSION (the daemon
+#    enrolls from the identity file provisioned in step 3). This is a SEPARATE hook from auspex's own capture
+#    SessionStart entry —
 #    auspex owns auspex.json (its capture hooks), we own the launch hook in a sibling own-file. Claude merges
 #    every *.json in managed-settings.d (concatenate + de-dup), so both fire; and because our command is not
 #    auspex-owned, a re-run of `auspex hooks install --system` never rewrites it.
