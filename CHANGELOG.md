@@ -55,8 +55,9 @@ Published components:
   that launches the supervised daemon in-session (which enrolls from that identity
   file). Claude cloud injects **no session secrets** and doesn't support committing
   setup to the repo, so config is supplied inline in the setup script of a
-  **default cloud environment**; the org token is a **write-only OTel-ingest token**
-  (a leak only permits posting telemetry — bounded blast radius; rotate on leak).
+  **default cloud environment**; the org token is a **low-privilege OTel token**
+  (a leak only permits posting telemetry and reading — not modifying — the capture
+  config, never captured data — bounded blast radius; rotate on leak).
   Attribution resolves Claude's per-session `CLAUDE_CODE_USER_EMAIL` (then
   `git config user.email`, then a baked `AUSPEX_CLOUD_WORK_EMAIL` fallback). Token
   usage / turn enrichment / sub-agent metrics ride along via auspex's built-in
