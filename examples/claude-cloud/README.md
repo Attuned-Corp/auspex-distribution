@@ -2,11 +2,12 @@
 
 > ⚠️ **DISCLAIMER — the org token is hard-coded inline in the setup-script config.** Claude cloud environments
 > **do not support secrets**, and the setup script is the only config surface, so this recipe requires placing
-> `AUSPEX_CLOUD_TOKEN` **inline in the environment's setup-script config**. That token is an **OTel ingest auth
-> token**: if it is exposed, it only permits **posting arbitrary telemetry payloads to the OTel ingest
-> endpoint** — it grants **no read access to captured data and no other authentication**. So the blast radius of
-> a leak is bounded to spurious event ingestion; still treat the setup config as sensitive and rotate the token
-> on suspected exposure.
+> `AUSPEX_CLOUD_TOKEN` **inline in the environment's setup-script config**. That token is a **low-privilege OTel
+> token**: if exposed, it only permits **posting telemetry payloads to the OTel ingest endpoint** and **reading
+> (never modifying) your org's auspex capture/hook configuration** — it grants **no access to captured data, no
+> write access, and no other authentication**. So the blast radius of a leak is bounded to spurious event
+> ingestion plus read-only visibility of the capture config; still treat the setup config as sensitive and
+> rotate the token on suspected exposure.
 
 Capture coding-agent activity (shell / file / tool events + token usage) from **Claude Code cloud agents** —
 the Anthropic-hosted Linux VMs behind *Claude Code on the web*, `claude --cloud`, the Claude tag, and routines
@@ -99,9 +100,9 @@ The setup script reads these from its environment (export them, as above — the
 - Without any resolved work email, capture still runs — events are just **unattributed**.
 
 > **Posture note.** Because there are no session secrets, the org token lives in the environment's
-> setup-script config (admin-controlled). It's an **OTel ingest token** — a leak only allows posting telemetry
-> payloads, never reading captured data — so the blast radius is bounded; still treat the config as sensitive
-> and rotate the token if it leaks.
+> setup-script config (admin-controlled). It's a **low-privilege OTel token** — a leak only allows posting
+> telemetry payloads and reading (not modifying) the capture config, never reading captured data — so the blast
+> radius is bounded; still treat the config as sensitive and rotate the token if it leaks.
 
 ### Step 3 — allowlist egress
 
@@ -186,5 +187,6 @@ placement tier (no double-capture).
 - **Owner-scoped attribution:** the resolved email is the dispatching human (`CLAUDE_CODE_USER_EMAIL` / git
   identity / baked fallback), so a multi-person agent attributes to that identity.
 - **Token in setup config:** with no session secrets, the org token is hard-coded inline in the environment's
-  setup-script config. It's a write-only **OTel ingest token** (a leak only permits posting telemetry, never
-  reading data), so the blast radius is bounded — still treat the config as sensitive and rotate on leak.
+  setup-script config. It's a low-privilege **OTel token** (a leak only permits posting telemetry and reading —
+  not modifying — the capture config, never reading captured data), so the blast radius is bounded — still treat
+  the config as sensitive and rotate on leak.
