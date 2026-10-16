@@ -58,6 +58,12 @@ curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/d
 & ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -BaseUrl <your-auspex-distribution-host> -Digest sha256:<64-hex>
 ```
 
+On Windows the installer also places **`auspexw.exe`** beside `auspex.exe`, verified the same way: the
+windowless build of auspex that coding tools run on every event (the `python.exe` / `pythonw.exe` pairing —
+it opens no console window, so each hook is about a third faster). `auspex install` picks it up from there. A
+release that predates it installs without it, and a `-Digest` pin installs `auspex.exe` only; the hooks then
+run through `auspex.exe`.
+
 > **The piped script cannot verify its own bytes** — its integrity roots in TLS + origin. For higher
 > assurance, each Release asset is cosign-signed (a `.cosign.bundle` beside it): download, verify the
 > installer's own signature with a pre-present cosign, then run it. The truly self-verifying acquisition is
