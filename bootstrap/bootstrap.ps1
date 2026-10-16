@@ -60,6 +60,21 @@ function Fetch([string]$u, [string]$out) {
   }
 }
 
+# Fetch-Optional is Fetch for an artifact a release may not carry: a 404, or the 403 an S3-backed CDN answers
+# for a missing object, returns $false; any other failure is still fatal. Skipping only costs speed (auspex
+# then runs its hooks through auspex.exe), and whatever IS downloaded is still verified, fail-closed.
+function Fetch-Optional([string]$u, [string]$out) {
+  Assert-Https $u
+  try {
+    Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing -MaximumRedirection 5
+    return $true
+  } catch {
+    $resp = $_.Exception.Response
+    if ($resp -and @(403, 404) -contains [int]$resp.StatusCode) { return $false }
+    Fail "failed to download $u : $($_.Exception.Message)" 11
+  }
+}
+
 function Get-Sha256Hex([string]$path) {
   (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLower()
 }
@@ -104,9 +119,13 @@ function Write-TrustedRoot {
 # Resolve the raw-binary digest for a version-path URL from the SIGNED manifest (verify: cosign — auspex
 # ADR 0047), the Windows-native equivalent of verify-lib.sh's resolve_binary_digest. Fetch + cosign-verify
 # the version→digest index (manifest.json), assert its version annotation matches the requested tag (closes
-# the version-substitution gap), then read the unique application/octet-stream descriptor for this os/arch
-# and return its bare-hex sha256. PowerShell parses the manifest with native ConvertFrom-Json — no jq.
-function Resolve-BinaryDigest([string]$u) {
+# the version-substitution gap), then read the unique descriptor of $MediaType for this os/arch and return its
+# bare-hex sha256: application/octet-stream is auspex.exe; application/vnd.microsoft.portable-executable is
+# auspexw.exe, the windowless build Windows coding tools run (a distinct type, so a selector written for one
+# raw binary per os/arch still finds exactly one). With -Optional, a manifest without that descriptor (a release
+# that predates auspexw.exe) returns $null instead of failing. PowerShell parses the manifest with native
+# ConvertFrom-Json — no jq.
+function Resolve-BinaryDigest([string]$u, [string]$MediaType = 'application/octet-stream', [switch]$Optional) {
   Ensure-Cosign
   $rootPath = Write-TrustedRoot
   # version root = dirname^3 of .../releases/<v>/<os>/<arch>/auspex.exe; os/arch/version from the path.
@@ -133,7 +152,7 @@ function Resolve-BinaryDigest([string]$u) {
       $json = Get-Content -Raw -LiteralPath $manifest.FullName | ConvertFrom-Json
       $mver = $json.annotations.'org.opencontainers.image.version'
       $descs = @($json.manifests | Where-Object {
-          $_.mediaType -eq 'application/octet-stream' -and $_.platform.os -eq $os -and $_.platform.architecture -eq $arch
+          $_.mediaType -eq $MediaType -and $_.platform.os -eq $os -and $_.platform.architecture -eq $arch
         })
     } catch {
       Fail "could not parse the signed manifest $verRoot/manifest.json — refusing to install" 14
@@ -141,8 +160,9 @@ function Resolve-BinaryDigest([string]$u) {
     if ($mver -ne $version) {
       Fail "the signed manifest is for '$mver' but the requested path is version '$version' — refusing (version substitution)" 14
     }
+    if ($Optional -and $descs.Count -eq 0) { return $null }
     if ($descs.Count -ne 1) {
-      Fail "the signed manifest has no unique raw-binary (application/octet-stream) descriptor for $os/$arch — refusing to install" 14
+      Fail "the signed manifest has no unique raw-binary ($MediaType) descriptor for $os/$arch — refusing to install" 14
     }
     $digest = $descs[0].digest
     if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
@@ -246,6 +266,45 @@ try {
 }
 
 Write-Host "auspex install: installed $binDest"
+
+# --- auspexw.exe: the windowless build coding tools run ----------------------------------------------------
+# `auspex install` places auspexw.exe from beside auspex.exe and wires the Windows coding tools to it: it opens no
+# console window, which makes every hook about a third faster (the python.exe / pythonw.exe pairing). Same
+# verification as auspex.exe, fail-closed: a file that is there but doesn't verify is never placed. A release
+# that predates it (no auspexw.exe at the version path, or no descriptor in its signed manifest) installs
+# without it — the hooks then run through a copy of auspex.exe, as before. A digest pin names one artifact, so
+# it installs auspex.exe only.
+$wDest = Join-Path $BinDir 'auspexw.exe'
+if ($Digest) {
+  Write-Host "auspex install: -Digest pins auspex.exe only — install auspexw.exe beside it for faster hooks"
+}
+elseif ($Url -match '/auspex\.exe$') {
+  $wUrl = $Url -replace '/auspex\.exe$', '/auspexw.exe'
+  $wTmp = New-TemporaryFile
+  $placed = $false
+  try {
+    switch ($Verify) {
+      'none' {
+        if (Fetch-Optional $wUrl $wTmp.FullName) { $placed = $true }
+      }
+      'checksum' {
+        if (Fetch-Optional $wUrl $wTmp.FullName) { Verify-Checksum $wTmp.FullName $wUrl; $placed = $true }
+      }
+      'cosign' {
+        $wDigest = Resolve-BinaryDigest $wUrl 'application/vnd.microsoft.portable-executable' -Optional
+        if ($wDigest) { Fetch-BlobByDigest $wUrl $wDigest $wTmp.FullName; $placed = $true }
+      }
+    }
+    if ($placed) {
+      Move-Item -LiteralPath $wTmp.FullName -Destination $wDest -Force
+      Write-Host "auspex install: installed $wDest"
+    } else {
+      Write-Host "auspex install: this release ships no auspexw.exe — coding-tool hooks will run through auspex.exe"
+    }
+  } finally {
+    if (Test-Path -LiteralPath $wTmp.FullName) { Remove-Item -LiteralPath $wTmp.FullName -Force }
+  }
+}
 if (($env:PATH -split ';') -notcontains $BinDir) {
   Write-Host "auspex install: note — $BinDir is not on your PATH; add it (setx PATH \"$BinDir;%PATH%\") and reopen your shell"
 }
