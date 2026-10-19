@@ -274,11 +274,12 @@ Write-Host "auspex install: installed $binDest"
 # `auspex install` places auspexw.exe from beside auspex.exe and wires the Windows coding tools to it: it opens no
 # console window, which makes every hook about a third faster (the python.exe / pythonw.exe pairing). A release
 # from $AuspexwSince on ships it, so it is fetched and verified exactly like auspex.exe, fail-closed. A release
-# before that installs auspex.exe alone, and its hooks run through a copy of auspex.exe, as before. A digest pin
-# names one artifact, so it installs auspex.exe only.
+# before that installs auspex.exe alone, and its hooks run auspex.exe, as before. A digest pin names one
+# artifact, so it installs auspex.exe only: from $AuspexwSince on, `auspex install` then needs auspexw.exe put
+# beside it.
 $wDest = Join-Path $BinDir 'auspexw.exe'
 if ($Digest) {
-  Write-Host "auspex install: -Digest pins auspex.exe only - install auspexw.exe beside it for faster hooks"
+  Write-Host "auspex install: -Digest pins auspex.exe only - from auspex 0.10.0 on, put auspexw.exe beside it before running auspex install"
 }
 elseif ($Url -match '/auspex\.exe$' -and (Test-ShipsAuspexw $Url)) {
   $wUrl = $Url -replace '/auspex\.exe$', '/auspexw.exe'

@@ -62,8 +62,9 @@ On Windows the installer also places **`auspexw.exe`** beside `auspex.exe`, veri
 windowless build of auspex that coding tools run on every event (the `python.exe` / `pythonw.exe` pairing —
 it opens no console window, so each hook is about a third faster). `auspex install` picks it up from there. It
 is required from auspex 0.10.0 on: if it is missing or doesn't verify, the install fails, as it would for
-`auspex.exe`. A release before 0.10.0 installs without it, and a `-Digest` pin installs `auspex.exe` only; the
-hooks then run through `auspex.exe`.
+`auspex.exe`. A release before 0.10.0 installs without it. A `-Digest` pin installs `auspex.exe` only: for
+0.10.0 and later, put `auspexw.exe` beside it (it has its own digest in the signed manifest) before running
+`auspex install`, which needs both.
 
 > **The piped script cannot verify its own bytes** — its integrity roots in TLS + origin. For higher
 > assurance, each Release asset is cosign-signed (a `.cosign.bundle` beside it): download, verify the
