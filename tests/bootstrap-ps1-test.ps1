@@ -1,14 +1,32 @@
 #!/usr/bin/env pwsh
-# bootstrap.ps1 contract: the script parses, and the release-version gate decides auspexw.exe as intended.
+# PowerShell installer contract: the shipped scripts are ASCII and parse, and bootstrap.ps1's release-version
+# gate decides auspexw.exe as intended.
 # Loads only the functions under test from the script's AST, so nothing is downloaded or installed.
 # Run: make ps1-test (needs pwsh; preinstalled on the GitHub-hosted ubuntu image).
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot '../bootstrap/bootstrap.ps1'
 
+# Every shipped PowerShell script must be pure ASCII: Windows PowerShell 5.1 reads a BOM-less file as ANSI, and
+# a UTF-8 em dash (E2 80 94) then decodes to a closing curly quote that ends any string it sits in, so the script
+# no longer parses there. pwsh 7 (this CI) reads UTF-8 fine, so only this byte check catches it.
+$shipped = @('bootstrap/bootstrap.ps1', 'mdm/verify-gate.ps1')
+$broken = $false
+foreach ($rel in $shipped) {
+  $path = Join-Path $PSScriptRoot "../$rel"
+  $bytes = [IO.File]::ReadAllBytes($path)
+  $bad = @(for ($i = 0; $i -lt $bytes.Length; $i++) { if ($bytes[$i] -gt 126 -or ($bytes[$i] -lt 32 -and @(9, 10, 13) -notcontains $bytes[$i])) { $i } })
+  if ($bad.Count) {
+    $line = ([Text.Encoding]::ASCII.GetString($bytes, 0, $bad[0]) -split "`n").Count
+    Write-Host "FAIL  $rel has $($bad.Count) non-ASCII byte(s), first on line $line"; $broken = $true
+  } else { Write-Host "ok    $rel is ASCII" }
+  $errs = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errs)
+  if ($errs) { $errs | ForEach-Object { Write-Host "FAIL  $rel parse: $_" }; $broken = $true } else { Write-Host "ok    $rel parses" }
+}
+if ($broken) { exit 1 }
+
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$null, [ref]$parseErrors)
-if ($parseErrors) { $parseErrors | ForEach-Object { Write-Host "FAIL parse: $_" }; exit 1 }
-Write-Host 'ok    bootstrap.ps1 parses'
 
 foreach ($name in 'Get-ReleaseVersion', 'Test-ShipsAuspexw') {
   $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)

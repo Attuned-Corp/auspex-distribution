@@ -8,8 +8,9 @@
 verify-test:
 	@./tests/install-verify-test.sh
 
-# bootstrap.ps1 contract: the script parses, and the release-version gate that decides auspexw.exe compares
-# versions numerically (0.10.0 > 0.9.1) with pre-releases counting as their base version. Needs pwsh.
+# PowerShell installer contract: the shipped .ps1 scripts are ASCII (Windows PowerShell 5.1 misreads BOM-less
+# UTF-8) and parse, and bootstrap.ps1's release-version gate that decides auspexw.exe compares versions
+# numerically (0.10.0 > 0.9.1) with pre-releases counting as their base version. Needs pwsh.
 .PHONY: ps1-test
 ps1-test:
 	@pwsh -NoProfile -File tests/bootstrap-ps1-test.ps1
@@ -46,7 +47,7 @@ validate-changelog-test:
 help:
 	@echo "Targets:"
 	@echo "  verify-test               installer + bootstrap download-verify contract (pure bash+HTTP; the PR gate)"
-	@echo "  ps1-test                  bootstrap.ps1 parses + its release-version gate (needs pwsh)"
+	@echo "  ps1-test                  PowerShell installers ASCII + parse, auspexw version gate (needs pwsh)"
 	@echo "  assemble                  build dist/auspex-install.sh|.ps1 from the shared recipe (Release assets)"
 	@echo "  shellcheck                lint all shell scripts"
 	@echo "  validate-changelog        structural check of CHANGELOG.md"

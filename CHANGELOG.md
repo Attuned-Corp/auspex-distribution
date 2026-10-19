@@ -43,6 +43,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   From auspex 0.10.0 on it is required (a missing or unverifiable `auspexw.exe` fails the install, like
   `auspex.exe`); a release before 0.10.0, or a `-Digest` pin, installs `auspex.exe` alone as before.
 
+### Fixed
+
+- **Installers** · **The PowerShell installer and MDM verify gate run in Windows PowerShell 5.1** — both
+  scripts contained em dashes, which Windows PowerShell 5.1 misreads in a file saved without a byte-order
+  mark, so a downloaded copy failed to parse there. They are now plain ASCII, and CI checks that they stay
+  that way.
+
 ## [2026-09-01]
 
 Published components:

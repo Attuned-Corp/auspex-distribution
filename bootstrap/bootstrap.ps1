@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  auspex Windows installer (irm | iex) — fetch + fail-closed verify + place on PATH.
+  auspex Windows installer (irm | iex) - fetch + fail-closed verify + place on PATH.
 
 .DESCRIPTION
   TEMPLATE: the trust material (identity regex, OIDC issuer, cosign version + windows digest, and the
   embedded Sigstore trusted_root.json) is INJECTED from src/span-auspex/verify-lib.sh by bootstrap/assemble.sh
-  — verify-lib.sh stays the single source of truth (SSOT) for the pins; this file is not runnable until
+  - verify-lib.sh stays the single source of truth (SSOT) for the pins; this file is not runnable until
   assembled into dist/auspex-install.ps1. PowerShell cannot share the bash verify recipe, so this is the
   Windows-native equivalent of the bash recipe's resolve_binary_digest / fetch_blob_by_digest / verify_sha256 (cross-language duplication is unavoidable;
   the reconcile guard checks verify-lib.sh, the SSOT the assembler injects from).
@@ -26,7 +26,7 @@ param(
   [string]$Verify = $(if ($env:AUSPEX_VERIFY) { $env:AUSPEX_VERIFY } else { 'cosign' }),
   [string]$BaseUrl = $env:AUSPEX_BASE_URL,   # REQUIRED unless -Url: no baked default (host-agnostic public repo)
   [string]$Url = $env:AUSPEX_BINARY_URL,
-  [string]$Digest = $env:AUSPEX_DIGEST,      # pin a raw sha256 (of the artifact) — installs the version-free blob directly
+  [string]$Digest = $env:AUSPEX_DIGEST,      # pin a raw sha256 (of the artifact) - installs the version-free blob directly
   [string]$BinDir = $env:AUSPEX_BIN_DIR,
   [string]$CosignBaseUrl = $(if ($env:AUSPEX_COSIGN_BASE_URL) { $env:AUSPEX_COSIGN_BASE_URL } else { 'https://github.com/sigstore/cosign/releases/download' })
 )
@@ -91,7 +91,7 @@ function Verify-Checksum([string]$file, [string]$u) {
   Remove-Item -LiteralPath $sumTmp.FullName -Force
   $got = Get-Sha256Hex $file
   if (-not $expected -or $expected -ne $got) {
-    Fail "SHA-256 mismatch for $u (expected '$expected', got '$got') — refusing to install" 12
+    Fail "SHA-256 mismatch for $u (expected '$expected', got '$got') - refusing to install" 12
   }
   Write-Host "auspex install: SHA-256 verified ($got)"
 }
@@ -110,7 +110,7 @@ function Ensure-Cosign {
   $got = Get-Sha256Hex $tmp
   if ($got -ne $CosignWinSha256.ToLower()) {
     Remove-Item -LiteralPath $tmp -Force
-    Fail "pinned cosign SHA-256 mismatch (expected $CosignWinSha256, got $got) — refusing to use a tampered cosign" 15
+    Fail "pinned cosign SHA-256 mismatch (expected $CosignWinSha256, got $got) - refusing to use a tampered cosign" 15
   }
   $script:CosignBin = $tmp
 }
@@ -121,13 +121,13 @@ function Write-TrustedRoot {
   return $path
 }
 
-# Resolve the raw-binary digest for a version-path URL from the SIGNED manifest (verify: cosign — auspex
+# Resolve the raw-binary digest for a version-path URL from the SIGNED manifest (verify: cosign - auspex
 # ADR 0047), the Windows-native equivalent of verify-lib.sh's resolve_binary_digest. Fetch + cosign-verify
-# the version→digest index (manifest.json), assert its version annotation matches the requested tag (closes
+# the version->digest index (manifest.json), assert its version annotation matches the requested tag (closes
 # the version-substitution gap), then read the unique descriptor of $MediaType for this os/arch and return its
 # bare-hex sha256: application/octet-stream is auspex.exe; application/vnd.microsoft.portable-executable is
 # auspexw.exe, the windowless build Windows coding tools run (a distinct type, so a selector written for one
-# raw binary per os/arch still finds exactly one). PowerShell parses the manifest with native ConvertFrom-Json —
+# raw binary per os/arch still finds exactly one). PowerShell parses the manifest with native ConvertFrom-Json -
 # no jq.
 function Resolve-BinaryDigest([string]$u, [string]$MediaType = 'application/octet-stream') {
   Ensure-Cosign
@@ -150,7 +150,7 @@ function Resolve-BinaryDigest([string]$u, [string]$MediaType = 'application/octe
       --certificate-oidc-issuer $CosignOidcIssuer `
       $manifest.FullName *> $null
     if ($LASTEXITCODE -ne 0) {
-      Fail "cosign FAILED to verify $verRoot/manifest.json against the pinned release identity — refusing to install" 13
+      Fail "cosign FAILED to verify $verRoot/manifest.json against the pinned release identity - refusing to install" 13
     }
     try {
       $json = Get-Content -Raw -LiteralPath $manifest.FullName | ConvertFrom-Json
@@ -159,17 +159,17 @@ function Resolve-BinaryDigest([string]$u, [string]$MediaType = 'application/octe
           $_.mediaType -eq $MediaType -and $_.platform.os -eq $os -and $_.platform.architecture -eq $arch
         })
     } catch {
-      Fail "could not parse the signed manifest $verRoot/manifest.json — refusing to install" 14
+      Fail "could not parse the signed manifest $verRoot/manifest.json - refusing to install" 14
     }
     if ($mver -ne $version) {
-      Fail "the signed manifest is for '$mver' but the requested path is version '$version' — refusing (version substitution)" 14
+      Fail "the signed manifest is for '$mver' but the requested path is version '$version' - refusing (version substitution)" 14
     }
     if ($descs.Count -ne 1) {
-      Fail "the signed manifest has no unique raw-binary ($MediaType) descriptor for $os/$arch — refusing to install" 14
+      Fail "the signed manifest has no unique raw-binary ($MediaType) descriptor for $os/$arch - refusing to install" 14
     }
     $digest = $descs[0].digest
     if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
-      Fail "the resolved digest '$digest' is not a bare sha256 hex — refusing to install" 14
+      Fail "the resolved digest '$digest' is not a bare sha256 hex - refusing to install" 14
     }
     Write-Host "auspex install: resolved $version $os/$arch -> $digest (signed manifest verified)"
     return ($digest -replace '^sha256:', '')
@@ -178,7 +178,7 @@ function Resolve-BinaryDigest([string]$u, [string]$MediaType = 'application/octe
   }
 }
 
-# Fetch an artifact from the global content-addressed blob namespace and SELF-VERIFY (verify: cosign — auspex
+# Fetch an artifact from the global content-addressed blob namespace and SELF-VERIFY (verify: cosign - auspex
 # ADR 0047): the blob lives at <base>/blobs/sha256/<digest> where <base> is everything before /releases/ in
 # the version URL. sha256(bytes) must equal the digest we asked for, sealing the chain from the signed
 # manifest to the installed bytes; a mismatch is a corrupt/tampered blob and fails closed.
@@ -189,19 +189,19 @@ function Fetch-BlobByDigest([string]$u, [string]$digest, [string]$out) {
   $got = Get-Sha256Hex $out
   if ($got -ne $digest) {
     Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
-    Fail "by-digest self-verify FAILED — $blobUrl hashes to $got, not $digest (corrupt or tampered blob) — refusing to install" 12
+    Fail "by-digest self-verify FAILED - $blobUrl hashes to $got, not $digest (corrupt or tampered blob) - refusing to install" 12
   }
   Write-Host "auspex install: by-digest verified (sha256:$got)"
 }
 
-# Pin-by-digest (auspex ADR 0047 — the version-free pin): install the artifact STRAIGHT from the global
+# Pin-by-digest (auspex ADR 0047 - the version-free pin): install the artifact STRAIGHT from the global
 # content-addressed blob and self-verify, bypassing the version->manifest resolution. The digest is the
-# trust anchor (obtained out-of-band), so no version/manifest/cosign is consulted — the self-verify is the
+# trust anchor (obtained out-of-band), so no version/manifest/cosign is consulted - the self-verify is the
 # whole check and it survives a re-tag. <base> is the host root (blobs/sha256/<digest> is appended).
 function Acquire-ByDigest([string]$base, [string]$digest, [string]$out) {
   $d = ($digest -replace '^sha256:', '').ToLower()
   if ($d -notmatch '^[0-9a-f]{64}$') {
-    Fail "invalid pinned digest '$digest' — expected a 64-char sha256 hex (optionally 'sha256:'-prefixed)" 2
+    Fail "invalid pinned digest '$digest' - expected a 64-char sha256 hex (optionally 'sha256:'-prefixed)" 2
   }
   Write-Host "auspex install: pinning by digest sha256:$d (version-free; self-verify only)"
   Fetch-BlobByDigest ($base.TrimEnd('/')) $d $out
@@ -214,21 +214,21 @@ if ($Digest) {
   # from a full -Url (everything before /releases/). No version/os/arch derivation.
   if ($BaseUrl)  { $pinBase = $BaseUrl.TrimEnd('/') }
   elseif ($Url)  { $pinBase = ($Url -replace '/releases/.*$', '') }
-  else { Fail "-Digest needs a host — pass -BaseUrl <url> (or -Url to derive it), or set AUSPEX_DIGEST with AUSPEX_BASE_URL" 2 }
+  else { Fail "-Digest needs a host - pass -BaseUrl <url> (or -Url to derive it), or set AUSPEX_DIGEST with AUSPEX_BASE_URL" 2 }
 }
 elseif (-not $Url) {
-  if (-not $BaseUrl) { Fail "no artifact source — pass -BaseUrl <url> (your auspex distribution host; see your install instructions) or -Url <full-url>, or set AUSPEX_BASE_URL" 2 }
+  if (-not $BaseUrl) { Fail "no artifact source - pass -BaseUrl <url> (your auspex distribution host; see your install instructions) or -Url <full-url>, or set AUSPEX_BASE_URL" 2 }
   if (-not $Version) {
     # No -Version: resolve the CDN's canonical `latest` pointer to a CONCRETE tag, then verify against it
-    # (keeps verify: cosign tag-bound — a bare "latest" would fail the manifest version-annotation check).
+    # (keeps verify: cosign tag-bound - a bare "latest" would fail the manifest version-annotation check).
     # Pass -Version <tag> (or -Digest) to pin instead.
     $verUrl = "$($BaseUrl.TrimEnd('/'))/releases/latest/VERSION"
-    Write-Host "auspex install: no -Version given — resolving latest from $verUrl"
+    Write-Host "auspex install: no -Version given - resolving latest from $verUrl"
     $verTmp = New-TemporaryFile
     Fetch $verUrl $verTmp.FullName
     $Version = ((Get-Content -LiteralPath $verTmp.FullName -First 1) + '').Trim()
     Remove-Item -LiteralPath $verTmp.FullName -Force -ErrorAction SilentlyContinue
-    if (-not $Version -or $Version -notmatch '^v[0-9]') { Fail "resolved 'latest' is not a version tag ('$Version') — pass -Version <tag> or -Digest" 11 }
+    if (-not $Version -or $Version -notmatch '^v[0-9]') { Fail "resolved 'latest' is not a version tag ('$Version') - pass -Version <tag> or -Digest" 11 }
     Write-Host "auspex install: resolved latest -> $Version"
   }
   $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -258,7 +258,7 @@ try {
   else {
     Write-Host "auspex install: acquiring binary (verify: $Verify) for $Url"
     switch ($Verify) {
-      'none'     { Write-Warning "auspex install: -Verify none — installing WITHOUT verification (not recommended)"; Fetch $Url $dlTmp.FullName }
+      'none'     { Write-Warning "auspex install: -Verify none - installing WITHOUT verification (not recommended)"; Fetch $Url $dlTmp.FullName }
       'checksum' { Fetch $Url $dlTmp.FullName; Verify-Checksum $dlTmp.FullName $Url }
       'cosign'   { $digest = Resolve-BinaryDigest $Url; Fetch-BlobByDigest $Url $digest $dlTmp.FullName }
     }
@@ -278,7 +278,7 @@ Write-Host "auspex install: installed $binDest"
 # names one artifact, so it installs auspex.exe only.
 $wDest = Join-Path $BinDir 'auspexw.exe'
 if ($Digest) {
-  Write-Host "auspex install: -Digest pins auspex.exe only — install auspexw.exe beside it for faster hooks"
+  Write-Host "auspex install: -Digest pins auspex.exe only - install auspexw.exe beside it for faster hooks"
 }
 elseif ($Url -match '/auspex\.exe$' -and (Test-ShipsAuspexw $Url)) {
   $wUrl = $Url -replace '/auspex\.exe$', '/auspexw.exe'
@@ -296,8 +296,8 @@ elseif ($Url -match '/auspex\.exe$' -and (Test-ShipsAuspexw $Url)) {
   }
 }
 else {
-  Write-Host "auspex install: this release predates auspexw.exe — coding-tool hooks will run through auspex.exe"
+  Write-Host "auspex install: this release predates auspexw.exe - coding-tool hooks will run through auspex.exe"
 }
 if (($env:PATH -split ';') -notcontains $BinDir) {
-  Write-Host "auspex install: note — $BinDir is not on your PATH; add it (setx PATH \"$BinDir;%PATH%\") and reopen your shell"
+  Write-Host "auspex install: note - $BinDir is not on your PATH; add it (setx PATH \"$BinDir;%PATH%\") and reopen your shell"
 }
