@@ -42,6 +42,11 @@ jobs:
       - name: install + bootstrap download-verify contract
         run: make verify-test
 
+      # bootstrap.ps1 (the Windows installer) parses, and its release-version gate decides auspexw.exe as
+      # intended (pwsh is preinstalled on the GitHub-hosted ubuntu image).
+      - name: bootstrap.ps1 contract
+        run: make ps1-test
+
   changelog:
     name: Validate CHANGELOG.md
     runs-on: ubuntu-latest
