@@ -1,18 +1,18 @@
 <#
 .SYNOPSIS
-  auspex MDM verify-before-install gate (Windows / Intune .msi) — verify fail-closed, then let the wrapper install.
+  auspex MDM verify-before-install gate (Windows / Intune .msi) - verify fail-closed, then let the wrapper install.
 
 .DESCRIPTION
   TEMPLATE: the trust material (identity regex, OIDC issuer, cosign version + windows digest, and the
   embedded Sigstore trusted_root.json) is INJECTED from src/span-auspex/verify-lib.sh by bootstrap/assemble.sh
-  — verify-lib.sh stays the single source of truth (SSOT) for the pins; this file is not runnable until
+  - verify-lib.sh stays the single source of truth (SSOT) for the pins; this file is not runnable until
   assembled into dist/auspex-verify-gate.ps1. PowerShell cannot share the bash verify recipe, so this is the
   Windows-native equivalent of verify_cosign_bundle (cross-language duplication is unavoidable; the reconcile
   guard checks verify-lib.sh, the SSOT the assembler injects from).
 
   Verifies a staged (or fetched) .msi + its per-artifact cosign bundle against the pinned release identity
-  and EXITS NON-ZERO on any failure, so the Intune install command (chained `; if ($LASTEXITCODE)… ` or a
-  requirement script) never installs an unverified/tampered package. It does NOT run msiexec itself — the
+  and EXITS NON-ZERO on any failure, so the Intune install command (chained `; if ($LASTEXITCODE)... ` or a
+  requirement script) never installs an unverified/tampered package. It does NOT run msiexec itself - the
   wrapper does, only on exit 0 (see mdm/README.md). Post-trust: with a pre-provisioned pinned cosign on the
   runner, verify needs no Fulcio/Rekor/TUF/GitHub egress (CDN-only to fetch, or fully offline if staged).
 
@@ -78,7 +78,7 @@ function Ensure-Cosign {
   $got = Get-Sha256Hex $tmp
   if ($got -ne $CosignWinSha256.ToLower()) {
     Remove-Item -LiteralPath $tmp -Force
-    Fail "pinned cosign SHA-256 mismatch (expected $CosignWinSha256, got $got) — refusing to use a tampered cosign" 15
+    Fail "pinned cosign SHA-256 mismatch (expected $CosignWinSha256, got $got) - refusing to use a tampered cosign" 15
   }
   $script:CosignBin = $tmp
 }
@@ -89,7 +89,7 @@ function Write-TrustedRoot {
   return $path
 }
 
-# Provenance check for a .msi carrying its OWN per-artifact cosign bundle (auspex ADR 0033 §9): the
+# Provenance check for a .msi carrying its OWN per-artifact cosign bundle (auspex ADR 0033 section 9): the
 # signature is directly over the artifact bytes (no checksums.txt indirection).
 function Verify-CosignBundle([string]$file, [string]$bundleSrc) {
   Ensure-Cosign
@@ -103,7 +103,7 @@ function Verify-CosignBundle([string]$file, [string]$bundleSrc) {
     $bundlePath = $bundleSrc
   } else {
     Remove-Item -LiteralPath $rootPath -Force
-    Fail "cosign bundle not found at $bundleSrc — refusing to install" 11
+    Fail "cosign bundle not found at $bundleSrc - refusing to install" 11
   }
   & $script:CosignBin verify-blob `
     --bundle $bundlePath `
@@ -115,7 +115,7 @@ function Verify-CosignBundle([string]$file, [string]$bundleSrc) {
   if ($tmpBundle) { Remove-Item -LiteralPath $tmpBundle.FullName -Force }
   Remove-Item -LiteralPath $rootPath -Force
   if ($rc -ne 0) {
-    Fail "cosign FAILED to verify $file against the pinned release identity — refusing to install" 13
+    Fail "cosign FAILED to verify $file against the pinned release identity - refusing to install" 13
   }
   Write-Host "auspex mdm-gate: cosign-verified ($file signature valid for the pinned release identity)"
 }
@@ -139,7 +139,7 @@ if ($Url) {
 
 try {
   switch ($Verify) {
-    'none'   { Write-Warning "auspex mdm-gate: -Verify none — NOT verifying provenance (not recommended)" }
+    'none'   { Write-Warning "auspex mdm-gate: -Verify none - NOT verifying provenance (not recommended)" }
     'cosign' { Verify-CosignBundle $Installer $Bundle }
   }
 } catch {
@@ -147,4 +147,4 @@ try {
   throw
 }
 
-Write-Host "auspex mdm-gate: VERIFIED — safe to install: $Installer"
+Write-Host "auspex mdm-gate: VERIFIED - safe to install: $Installer"

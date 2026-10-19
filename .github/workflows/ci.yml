@@ -42,6 +42,11 @@ jobs:
       - name: install + bootstrap download-verify contract
         run: make verify-test
 
+      # The PowerShell installers (bootstrap.ps1, mdm/verify-gate.ps1) are ASCII and parse, and bootstrap.ps1's
+      # release-version gate decides auspexw.exe as intended (pwsh is preinstalled on the GitHub-hosted ubuntu image).
+      - name: PowerShell installer contract
+        run: make ps1-test
+
   changelog:
     name: Validate CHANGELOG.md
     runs-on: ubuntu-latest

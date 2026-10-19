@@ -35,6 +35,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Installers** · **Windows installs `auspexw.exe`** — the PowerShell installer now also downloads,
+  verifies (same `-Verify` mode as `auspex.exe`, fail-closed) and places `auspexw.exe` beside `auspex.exe`:
+  the windowless build Windows coding tools run on every event, which makes each hook about a third faster.
+  From auspex 0.10.0 on it is required (a missing or unverifiable `auspexw.exe` fails the install, like
+  `auspex.exe`); a release before 0.10.0 installs `auspex.exe` alone as before. A `-Digest` pin installs
+  `auspex.exe` only, so for 0.10.0 and later put `auspexw.exe` beside it before running `auspex install`.
+
 ## [2026-09-01]
 
 Published components:
