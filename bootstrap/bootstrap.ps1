@@ -65,12 +65,19 @@ function Fetch([string]$u, [string]$out) {
 # installing without it would silently lose the hook speed-up. Older releases install auspex.exe alone.
 $AuspexwSince = [version]'0.10.0'
 
-# Test-ShipsAuspexw reads the release version from a .../releases/<v>/<os>/<arch>/<file> URL and reports
-# whether that release carries auspexw.exe. A pre-release counts as its base version (v0.10.0-rc1 ships it).
-# A path it can't read a version from is treated as an older release.
+# Get-ReleaseVersion reads the release version from a .../releases/<v>/<os>/<arch>/<file> URL as a [version]
+# (major.minor.patch); a pre-release reads as its base version (v0.10.0-rc1 -> 0.10.0). $null when the path
+# carries no version.
+function Get-ReleaseVersion([string]$u) {
+  if ($u -notmatch '/releases/v?(\d+)\.(\d+)\.(\d+)[^/]*/') { return $null }
+  return [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+}
+
+# Test-ShipsAuspexw reports whether the release at $u carries auspexw.exe. A path without a version is treated
+# as an older release.
 function Test-ShipsAuspexw([string]$u) {
-  if ($u -notmatch '/releases/v?(\d+)\.(\d+)\.(\d+)[^/]*/') { return $false }
-  return ([version]"$($Matches[1]).$($Matches[2]).$($Matches[3])") -ge $AuspexwSince
+  $v = Get-ReleaseVersion $u
+  return ($null -ne $v) -and ($v -ge $AuspexwSince)
 }
 
 function Get-Sha256Hex([string]$path) {
