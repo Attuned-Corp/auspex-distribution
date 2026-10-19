@@ -75,6 +75,19 @@ function Fetch-Optional([string]$u, [string]$out) {
   }
 }
 
+# auspexw.exe ships in every auspex release from this version on (its pre-releases included), so for those the
+# installer requires it: a missing auspexw.exe there is a broken or tampered release, not an older one, and
+# installing without it would silently lose the hook speed-up. Older releases install auspex.exe alone.
+$AuspexwSince = [version]'0.10.0'
+
+# Test-RequiresAuspexw reads the release version from a .../releases/<v>/<os>/<arch>/<file> URL and reports
+# whether that release must carry auspexw.exe. A pre-release counts as its base version (v0.10.0-rc1 ships
+# it). A path it can't read a version from is treated as an older release.
+function Test-RequiresAuspexw([string]$u) {
+  if ($u -notmatch '/releases/v?(\d+)\.(\d+)\.(\d+)[^/]*/') { return $false }
+  return ([version]"$($Matches[1]).$($Matches[2]).$($Matches[3])") -ge $AuspexwSince
+}
+
 function Get-Sha256Hex([string]$path) {
   (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLower()
 }
@@ -270,28 +283,33 @@ Write-Host "auspex install: installed $binDest"
 # --- auspexw.exe: the windowless build coding tools run ----------------------------------------------------
 # `auspex install` places auspexw.exe from beside auspex.exe and wires the Windows coding tools to it: it opens no
 # console window, which makes every hook about a third faster (the python.exe / pythonw.exe pairing). Same
-# verification as auspex.exe, fail-closed: a file that is there but doesn't verify is never placed. A release
-# that predates it (no auspexw.exe at the version path, or no descriptor in its signed manifest) installs
-# without it — the hooks then run through a copy of auspex.exe, as before. A digest pin names one artifact, so
-# it installs auspex.exe only.
+# verification as auspex.exe, fail-closed: a file that is there but doesn't verify is never placed. From
+# $AuspexwSince on it is required, like auspex.exe; a release that predates it (no auspexw.exe at the version
+# path, or no descriptor in its signed manifest) installs without it, and the hooks then run through a copy of
+# auspex.exe, as before. A digest pin names one artifact, so it installs auspex.exe only.
 $wDest = Join-Path $BinDir 'auspexw.exe'
 if ($Digest) {
   Write-Host "auspex install: -Digest pins auspex.exe only — install auspexw.exe beside it for faster hooks"
 }
 elseif ($Url -match '/auspex\.exe$') {
   $wUrl = $Url -replace '/auspex\.exe$', '/auspexw.exe'
+  $wRequired = Test-RequiresAuspexw $wUrl
   $wTmp = New-TemporaryFile
   $placed = $false
   try {
     switch ($Verify) {
       'none' {
-        if (Fetch-Optional $wUrl $wTmp.FullName) { $placed = $true }
+        if ($wRequired) { Fetch $wUrl $wTmp.FullName; $placed = $true }
+        elseif (Fetch-Optional $wUrl $wTmp.FullName) { $placed = $true }
       }
       'checksum' {
-        if (Fetch-Optional $wUrl $wTmp.FullName) { Verify-Checksum $wTmp.FullName $wUrl; $placed = $true }
+        if ($wRequired) { Fetch $wUrl $wTmp.FullName; $placed = $true }
+        elseif (Fetch-Optional $wUrl $wTmp.FullName) { $placed = $true }
+        if ($placed) { Verify-Checksum $wTmp.FullName $wUrl }
       }
       'cosign' {
-        $wDigest = Resolve-BinaryDigest $wUrl 'application/vnd.microsoft.portable-executable' -Optional
+        $wDigest = if ($wRequired) { Resolve-BinaryDigest $wUrl 'application/vnd.microsoft.portable-executable' }
+                   else { Resolve-BinaryDigest $wUrl 'application/vnd.microsoft.portable-executable' -Optional }
         if ($wDigest) { Fetch-BlobByDigest $wUrl $wDigest $wTmp.FullName; $placed = $true }
       }
     }
@@ -299,7 +317,7 @@ elseif ($Url -match '/auspex\.exe$') {
       Move-Item -LiteralPath $wTmp.FullName -Destination $wDest -Force
       Write-Host "auspex install: installed $wDest"
     } else {
-      Write-Host "auspex install: this release ships no auspexw.exe — coding-tool hooks will run through auspex.exe"
+      Write-Host "auspex install: this release predates auspexw.exe — coding-tool hooks will run through auspex.exe"
     }
   } finally {
     if (Test-Path -LiteralPath $wTmp.FullName) { Remove-Item -LiteralPath $wTmp.FullName -Force }
