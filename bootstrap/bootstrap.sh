@@ -119,16 +119,23 @@ elif [ -z "$BINARY_URL" ]; then
     # `VERSION` marker naming the tag it mirrors; resolving to the concrete tag keeps verify: cosign
     # tag-bound (the signed manifest's version annotation must equal the tag in the URL — a bare "latest"
     # would fail that check). Pass --version <tag> (or --digest) to pin instead.
+    # The marker is unsigned, so fetch it like every other download (https-only, no downgrade redirect, capped)
+    # and accept only a full release tag — the shape the release identity signs, with no room for a path.
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: no --version given — resolving latest from ${BASE_URL%/}/releases/latest/VERSION" >&2
-    VERSION="$(curl -fsSL "${BASE_URL%/}/releases/latest/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+    ver_tmp="$(mktemp)"
+    if fetch "${BASE_URL%/}/releases/latest/VERSION" "$ver_tmp"; then
+      VERSION="$(head -n 1 "$ver_tmp" | tr -d '[:space:]')"
+    fi
+    rm -f "$ver_tmp"
     if [ -z "$VERSION" ]; then
       echo "${AUSPEX_VERIFY_LOG_PREFIX}: could not resolve 'latest' (no ${BASE_URL%/}/releases/latest/VERSION) — pass --version <tag> (e.g. v0.1.0) or --digest <sha256>" >&2
       exit "$AUSPEX_VERIFY_EX_FETCH"
     fi
-    case "$VERSION" in
-      v[0-9]*) ;;
-      *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved 'latest' is not a version tag ('${VERSION}') — refusing" >&2; exit "$AUSPEX_VERIFY_EX_FETCH" ;;
-    esac
+    release_tag_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+    if ! [[ "$VERSION" =~ $release_tag_re ]]; then
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved 'latest' is not a release tag ('${VERSION}') — refusing" >&2
+      exit "$AUSPEX_VERIFY_EX_FETCH"
+    fi
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved latest -> ${VERSION}" >&2
   fi
   OS="$(detect_os)"

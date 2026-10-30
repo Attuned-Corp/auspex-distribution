@@ -35,6 +35,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-10-30]
+
+Published components:
+
+- **Install surface** — `installers-v0.1.3` (GitHub Release; the Windows installer also places
+  `auspexw.exe`, and both installers resolve `latest` more strictly; the first installers release
+  published as an immutable GitHub Release)
+
 ### Added
 
 - **Installers** · **Windows installs `auspexw.exe`** — the PowerShell installer now also downloads,
@@ -43,6 +51,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   From auspex 0.10.0 on it is required (a missing or unverifiable `auspexw.exe` fails the install, like
   `auspex.exe`); a release before 0.10.0 installs `auspex.exe` alone as before. A `-Digest` pin installs
   `auspex.exe` only, so for 0.10.0 and later put `auspexw.exe` beside it before running `auspex install`.
+- **Installers** · **Verifying the installer before you run it** — the README now gives the exact `cosign
+  verify-blob` command (identity and issuer) for checking an installer or MDM gate script's own signature,
+  and recommends keeping a verified copy for scheduled jobs instead of piping a fresh download each run.
+
+### Security
+
+- **Installers** · **Stricter `latest` lookup** — with no `--version`, the macOS / Linux installer now
+  fetches the unsigned `releases/latest/VERSION` pointer like every other download: HTTPS only, no redirect
+  to plain HTTP, with the same time and size limits. Both installers now accept only a full release tag
+  from it (`vX.Y.Z` or `vX.Y.Z-<pre>`), so a tampered pointer can't smuggle a path into the download URL.
 
 ## [2026-09-01]
 

@@ -44,6 +44,10 @@ from your install instructions, or an internal mirror), `--verify cosign|checksu
 `AUSPEX_COSIGN_BASE_URL` (mirror the pinned cosign CLI for air-gapped installs). Same verify tiers as the
 Feature.
 
+The `latest` pointer (`releases/latest/VERSION`) is **unsigned**. It only chooses which release to install;
+the signature check then proves that release is genuine, not that it is the newest. The installer accepts
+only a full release tag from it (`vX.Y.Z` or `vX.Y.Z-<pre>`). Pass `--version` to choose the release yourself.
+
 To pin the **exact bytes** (version-free — survives a re-tag, needs no cosign/jq), pass `--digest` /
 `-Digest` with just the host:
 
@@ -66,11 +70,31 @@ is required from auspex 0.10.0 on: if it is missing or doesn't verify, the insta
 0.10.0 and later, put `auspexw.exe` beside it (it has its own digest in the signed manifest) before running
 `auspex install`, which needs both.
 
-> **The piped script cannot verify its own bytes** — its integrity roots in TLS + origin. For higher
-> assurance, each Release asset is cosign-signed (a `.cosign.bundle` beside it): download, verify the
-> installer's own signature with a pre-present cosign, then run it. The truly self-verifying acquisition is
-> the packaged / notarized / MDM channel (the platform is the pre-present verifier). See
-> [Network access](./docs/networking.md) for the per-path host allow-lists and the offline story.
+### Verifying the installer before you run it
+
+**The piped script cannot verify its own bytes** — its integrity roots in TLS + origin. Every Release asset
+is cosign-signed (a `.cosign.bundle` beside it). For higher assurance, or for a scheduled job that re-runs the
+installer, download a pinned release once, verify it with a cosign you already have, and run that copy:
+
+```bash
+R=https://github.com/Attuned-Corp/auspex-distribution/releases/download/<installers-tag>
+curl -fsSLO "$R/auspex-install.sh"
+curl -fsSLO "$R/auspex-install.sh.cosign.bundle"
+cosign verify-blob \
+  --bundle auspex-install.sh.cosign.bundle \
+  --certificate-identity-regexp '^https://github\.com/(?i:attuned-corp)/auspex-distribution/\.github/workflows/release-bootstrap\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  auspex-install.sh
+bash auspex-install.sh --base-url <your-auspex-distribution-host>
+```
+
+The same command verifies `auspex-install.ps1`, `auspex-verify-gate.sh` and `auspex-verify-gate.ps1`. The
+signature proves the file was built by this repo's release workflow on `main`; it does not name the release
+tag. If you keep the verified copy for later runs, record its sha256 and check it before each run.
+
+The truly self-verifying acquisition is the packaged / notarized / MDM channel (the platform is the
+pre-present verifier). See [Network access](./docs/networking.md) for the per-path host allow-lists and the
+offline story.
 
 The installers are **assembled** ([`bootstrap/assemble.sh`](./bootstrap/assemble.sh)) from the one
 `verify-lib.sh` recipe with `trusted_root.json` embedded — there is no bootstrap-specific copy of the trust
