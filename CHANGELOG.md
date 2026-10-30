@@ -35,6 +35,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-10-30]
+
+Published components:
+
+- **Install surface** — `installers-v0.1.3` (GitHub Release; the Windows installer also places
+  `auspexw.exe`, and both installers resolve `latest` more strictly; the first installers release
+  published as an immutable GitHub Release)
+
 ### Added
 
 - **Installers** · **Windows installs `auspexw.exe`** — the PowerShell installer now also downloads,
