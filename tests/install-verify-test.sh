@@ -425,6 +425,58 @@ boot_digest_check "boot-digest-base-url" ok   "--base-url ${BASE}"              
 boot_digest_check "boot-digest-via-url"  ok   "--url ${BASE}/${COSIGN_RELDIR}/auspex"      good # host derived from --url
 boot_digest_check "boot-digest-tampered" fail "--base-url ${BASE}"                         bad  # blob ≠ pin → fail closed
 
+# curl|sh bootstrap with no --version: resolve the unsigned releases/latest/VERSION marker to a concrete tag,
+# then install that tag's host-os/arch path. Anything but a full release tag must be refused before download.
+LATEST_TAG="v9.9.9"
+LATEST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "$(uname -m)" in
+  x86_64 | amd64) LATEST_ARCH=amd64 ;;
+  aarch64 | arm64) LATEST_ARCH=arm64 ;;
+  *) LATEST_ARCH="" ;;
+esac
+boot_latest_check() { # <label> <expect ok|fail> <script> <marker contents|absent>
+  local label="$1" expect="$2" script="$3" marker="$4" bootdir="$WORK/bootdest" rc=0
+  local reldir="$WEBROOT/releases/${LATEST_TAG}/${LATEST_OS}/${LATEST_ARCH}"
+  rm -rf "$WEBROOT/releases/latest" "$bootdir"
+  mkdir -p "$WEBROOT/releases/latest" "$reldir"
+  [ "$marker" = absent ] || printf '%s\n' "$marker" >"$WEBROOT/releases/latest/VERSION"
+  cp "$WEBROOT/auspex" "$reldir/auspex"
+  printf '%s  auspex\n' "$GOOD_SUM" >"$reldir/auspex.sha256"
+  env -i PATH="$PATH" \
+    bash "$script" --base-url "$BASE" --verify checksum --bin-dir "$bootdir" >"$WORK/out.log" 2>&1 || rc=$?
+  local got="ok"
+  [ "$rc" -ne 0 ] && got="fail"
+  if [ "$got" != "$expect" ]; then
+    echo "FAIL [$label]: expected $expect but ${got}ed (rc=$rc)" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$expect" = "ok" ] && { [ ! -x "$bootdir/auspex" ] || ! cmp -s "$WEBROOT/auspex" "$bootdir/auspex"; }; then
+    echo "FAIL [$label]: reported success but ${bootdir}/auspex is missing/wrong" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$expect" = "fail" ] && [ -e "$bootdir/auspex" ]; then
+    echo "FAIL [$label]: refused install still left a binary (must fail closed)" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: bootstrap ${got} as expected"
+  pass=$((pass + 1))
+}
+
+echo "==> curl|sh bootstrap latest resolution"
+if [ -n "$LATEST_ARCH" ]; then
+  boot_latest_check "boot-latest-checkout"    ok   "$BOOTSTRAP_SH" "$LATEST_TAG"                     # marker → tag → install
+  boot_latest_check "boot-latest-assembled"   ok   "$ASSEMBLED_SH" "$LATEST_TAG"
+  boot_latest_check "boot-latest-absent"      fail "$ASSEMBLED_SH" absent                            # no marker → refuse
+  boot_latest_check "boot-latest-not-a-tag"   fail "$ASSEMBLED_SH" "latest"                          # not a release tag
+  boot_latest_check "boot-latest-path-in-tag" fail "$ASSEMBLED_SH" "${LATEST_TAG}/../${LATEST_TAG}"  # a path, not a tag
+else
+  echo "skip [boot latest matrix]: unsupported host CPU '$(uname -m)'"
+fi
+
 # ---- MDM verify-before-install gate (AC7) ------------------------------------------------------------
 # The gate reuses the SAME recipe via verify_cosign_bundle (bundle-direct over the .pkg/.msi bytes — no
 # checksums.txt indirection). A pure-bash harness can't mint a real signature, so drive the cosign wiring

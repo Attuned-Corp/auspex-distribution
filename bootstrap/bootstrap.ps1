@@ -228,7 +228,8 @@ elseif (-not $Url) {
     Fetch $verUrl $verTmp.FullName
     $Version = ((Get-Content -LiteralPath $verTmp.FullName -First 1) + '').Trim()
     Remove-Item -LiteralPath $verTmp.FullName -Force -ErrorAction SilentlyContinue
-    if (-not $Version -or $Version -notmatch '^v[0-9]') { Fail "resolved 'latest' is not a version tag ('$Version') - pass -Version <tag> or -Digest" 11 }
+    # The marker is unsigned: accept only a full release tag (the shape the release identity signs, no room for a path).
+    if (-not $Version -or $Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { Fail "resolved 'latest' is not a release tag ('$Version') - pass -Version <tag> or -Digest" 11 }
     Write-Host "auspex install: resolved latest -> $Version"
   }
   $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
