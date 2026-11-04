@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/octet-stream",
+      "digest": "sha256:973516fbe7bfb3bb4e0f56d177f787992c15a5def65f2ce908676b79f64e387a",
+      "size": 20568352,
+      "platform": {
+        "os": "darwin",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_darwin_amd64"
+      }
+    },
+    {
+      "mediaType": "application/gzip",
+      "digest": "sha256:daf773445a226db44f22bcdd3d37050d75094ec63f4cf76b49c94ba165b23028",
+      "size": 7923109,
+      "platform": {
+        "os": "darwin",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_darwin_amd64.tar.gz"
+      }
+    },
+    {
+      "mediaType": "application/octet-stream",
+      "digest": "sha256:66d85e7c2c0f19eef1269d90cbbc7ad851cf0b106e414727b13c46a3ef06984b",
+      "size": 19172034,
+      "platform": {
+        "os": "darwin",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_darwin_arm64"
+      }
+    },
+    {
+      "mediaType": "application/gzip",
+      "digest": "sha256:81d69675e347bf2a2369be3df1da0b2528612eb44a4b81e7922161258a15f5e3",
+      "size": 7309983,
+      "platform": {
+        "os": "darwin",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_darwin_arm64.tar.gz"
+      }
+    },
+    {
+      "mediaType": "application/octet-stream",
+      "digest": "sha256:6c8b477c11937bfa104a545774144b585c035194c02be566261149a0394da09c",
+      "size": 20017312,
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_amd64"
+      }
+    },
+    {
+      "mediaType": "application/vnd.alpine.apk.package",
+      "digest": "sha256:bd907febc22eb5746c41b25d69e15463a8745f2727d6c8b2dc6f3062db4e7f3b",
+      "size": 8042945,
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_amd64.apk"
+      }
+    },
+    {
+      "mediaType": "application/vnd.debian.binary-package",
+      "digest": "sha256:7d1e705fa7ece972684a7b39852995500d966217bb208ccdf375019543ae3047",
+      "size": 7734608,
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_amd64.deb"
+      }
+    },
+    {
+      "mediaType": "application/x-rpm",
+      "digest": "sha256:3d84aa75d4858f36289779abd20d08906b250c5e73889e9c6cf9a6484e3fcf25",
+      "size": 7735554,
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_amd64.rpm"
+      }
+    },
+    {
+      "mediaType": "application/gzip",
+      "digest": "sha256:1624c090add505a0aa3ff91b1310de6e7aeed0d497b6ac403fe1d3e899f31ded",
+      "size": 7740700,
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_amd64.tar.gz"
+      }
+    },
+    {
+      "mediaType": "application/octet-stream",
+      "digest": "sha256:d0e3fabc826cf17f240d63c1bce2b6a3afabb4019b130d181dae38a797744f0c",
+      "size": 18546848,
+      "platform": {
+        "os": "linux",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_arm64"
+      }
+    },
+    {
+      "mediaType": "application/vnd.alpine.apk.package",
+      "digest": "sha256:967fd563fab605798c147d073037577d03df32351fa73bf4a4169db41cacae5e",
+      "size": 7246459,
+      "platform": {
+        "os": "linux",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_arm64.apk"
+      }
+    },
+    {
+      "mediaType": "application/vnd.debian.binary-package",
+      "digest": "sha256:03c9b43759e2fd060773d48d4031754165cbdcbed9922c792c838ce17fa9c9c7",
+      "size": 6976052,
+      "platform": {
+        "os": "linux",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_arm64.deb"
+      }
+    },
+    {
+      "mediaType": "application/x-rpm",
+      "digest": "sha256:188f6e7cacbb73182cae5b757b0789306292285b690cee77fe230dd88c4f6caf",
+      "size": 6979593,
+      "platform": {
+        "os": "linux",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_arm64.rpm"
+      }
+    },
+    {
+      "mediaType": "application/gzip",
+      "digest": "sha256:1b5fa0ea60056c7d537d9c813c0c358e9370a3cd6fc45a34ab6793d81a8c83f9",
+      "size": 6976984,
+      "platform": {
+        "os": "linux",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_linux_arm64.tar.gz"
+      }
+    },
+    {
+      "mediaType": "application/octet-stream",
+      "digest": "sha256:ec8df09b1671f653bd6ec7719471d3054615aa0aca95ae0242b6144cc1819d22",
+      "size": 20761264,
+      "platform": {
+        "os": "windows",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_windows_amd64.exe"
+      }
+    },
+    {
+      "mediaType": "application/zip",
+      "digest": "sha256:afaf14b0116fe88efeeadcb462b5c4d4d906ee66dbccdb4e477be4257ab1cdfc",
+      "size": 16057543,
+      "platform": {
+        "os": "windows",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_windows_amd64.zip"
+      }
+    },
+    {
+      "mediaType": "application/octet-stream",
+      "digest": "sha256:fca378626dff9a6047a9d622241cd0c7557439d768cb20338bd4324362adf183",
+      "size": 18958000,
+      "platform": {
+        "os": "windows",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_windows_arm64.exe"
+      }
+    },
+    {
+      "mediaType": "application/zip",
+      "digest": "sha256:98105bd2a822d46f38d4f2c5eeb10142695f5261f98ac7c2cf637df5c2cc786f",
+      "size": 14290084,
+      "platform": {
+        "os": "windows",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspex_0.11.0_windows_arm64.zip"
+      }
+    },
+    {
+      "mediaType": "application/vnd.microsoft.portable-executable",
+      "digest": "sha256:0f64034c1a75bb828d93ea5ce1dcaa347168d7bf37f319e0febea6932bacfe65",
+      "size": 20761264,
+      "platform": {
+        "os": "windows",
+        "architecture": "amd64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspexw_0.11.0_windows_amd64.exe"
+      }
+    },
+    {
+      "mediaType": "application/vnd.microsoft.portable-executable",
+      "digest": "sha256:4baf8213017b9f150540003f65487d2fa9c1af1f2a43f0451ced5ebd8a42dd3d",
+      "size": 18958000,
+      "platform": {
+        "os": "windows",
+        "architecture": "arm64"
+      },
+      "annotations": {
+        "org.opencontainers.image.title": "auspexw_0.11.0_windows_arm64.exe"
+      }
+    }
+  ],
+  "annotations": {
+    "org.opencontainers.image.version": "v0.11.0"
+  }
+}

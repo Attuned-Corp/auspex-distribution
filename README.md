@@ -283,7 +283,8 @@ platform's binary has its own sha256.
 tier auto-provisions to parse the signed manifest (bash only — the PowerShell installer parses it with
 native JSON); and the Sigstore **`trusted_root.json`** beside it. These pins are the **single source of
 truth** shared by the Feature, the `curl|sh` + PowerShell bootstrap, and the MDM gate; the `reconcile-trust`
-guard fails CI if `COSIGN_VERSION` / the identity / the issuer drift from the auspex signer's descriptor.
+guard fails CI if `COSIGN_VERSION`, either identity (the release identity or the channel identity) or the issuer
+drifts from the auspex signer's descriptor.
 Keep `COSIGN_VERSION` in lock-step with the **signer** — the auspex repo's `Makefile.setup.mk`
 `COSIGN_VERSION`, the version the release workflow signs with — and bump them together:
 

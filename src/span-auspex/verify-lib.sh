@@ -53,6 +53,8 @@ AUSPEX_VERIFY_EX_DIGEST_ABSENT=14 # signed manifest doesn't bind this version/os
 AUSPEX_VERIFY_EX_COSIGN_PROVISION=15 # pinned cosign could not be provisioned (download / hash mismatch)
 AUSPEX_VERIFY_EX_JQ_PROVISION=17  # pinned jq could not be provisioned (download / hash mismatch) — needed
                                   # only by the cosign tier to parse the signed manifest
+AUSPEX_VERIFY_EX_CHANNEL_INVALID=18 # a correctly signed channel document isn't a schema-1 document
+AUSPEX_VERIFY_EX_CHANNEL_REPLAY=19  # the channel document's sequence is below the caller's --min-sequence
 
 # Pinned keyless-signing identity for the auspex release workflow — the binary SIGNER lives in the private
 # Attuned-Corp/auspex repo, so this stays in LOCK-STEP with that repo's signing descriptor
@@ -63,6 +65,11 @@ AUSPEX_VERIFY_EX_JQ_PROVISION=17  # pinned jq could not be provisioned (download
 # reconcile guard fails CI if this drifts from auspex's signing descriptor.
 COSIGN_IDENTITY_RE='^https://github\.com/(?i:attuned-corp)/auspex/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
+
+# Pinned identity for the release channel document (auspex ADR 0066): publish-release.yml on main. It is
+# disjoint from COSIGN_IDENTITY_RE, so a channel signature never verifies as a release artifact or the
+# reverse. The reconcile guard fails CI if it drifts from auspex's COSIGN_CHANNEL_IDENTITY_REGEXP.
+COSIGN_CHANNEL_IDENTITY_RE='^https://github\.com/(?i:attuned-corp)/auspex/\.github/workflows/publish-release\.yml@refs/heads/main$'
 
 # Self-provisioned cosign: verify: cosign needs no pre-installed CLI. When cosign is not on PATH we download
 # a PINNED release binary and verify it against a hardcoded per-arch SHA-256 BEFORE using it (fail closed) —
@@ -504,4 +511,72 @@ verify_cosign_bundle() { # <file> <bundle_src>
   [ -n "$tmp_bundle" ] && rm -f "$tmp_bundle"
   [ -n "$COSIGN_CLEANUP" ] && rm -f "$COSIGN_CLEANUP"
   echo "${AUSPEX_VERIFY_LOG_PREFIX}: cosign-verified (${file} signature valid for the pinned release identity)"
+}
+
+# Verify the release channel document (auspex ADR 0066), which names the `latest`, `stable` and `minimum`
+# versions: cosign-verify it against the pinned CHANNEL identity, then require a schema-1 document with
+# well-formed tags. With --min-sequence N it also refuses a `sequence` below N, so a caller that records the
+# last sequence it accepted can refuse a replayed older document (ADR 0066 §3). <doc> and <bundle> are local
+# paths. Sets CHANNEL_SEQUENCE.
+CHANNEL_SEQUENCE=""
+verify_channel_document() { # <doc> <bundle> [--min-sequence N]
+  if [ "$#" -lt 2 ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: usage: verify_channel_document <doc> <bundle> [--min-sequence N]" >&2
+    exit "$AUSPEX_VERIFY_EX_USAGE"
+  fi
+  local doc="$1" bundle="$2" min_seq="" seq
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --min-sequence)
+        case "${2:-}" in
+          "" | *[!0-9]*)
+            echo "${AUSPEX_VERIFY_LOG_PREFIX}: --min-sequence needs a whole number, got '${2:-}'" >&2
+            exit "$AUSPEX_VERIFY_EX_USAGE"
+            ;;
+        esac
+        min_seq="$2"
+        shift 2
+        ;;
+      *)
+        echo "${AUSPEX_VERIFY_LOG_PREFIX}: verify_channel_document: unknown option '$1'" >&2
+        exit "$AUSPEX_VERIFY_EX_USAGE"
+        ;;
+    esac
+  done
+  if [ ! -f "$doc" ] || [ ! -f "$bundle" ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: channel document or its bundle not found (${doc}, ${bundle}) — refusing to trust it" >&2
+    exit "$AUSPEX_VERIFY_EX_FETCH"
+  fi
+  ensure_cosign
+  ensure_jq
+  _require_trusted_root
+  if ! "$COSIGN_BIN" verify-blob \
+    --bundle "$bundle" \
+    --trusted-root "$TRUSTED_ROOT" \
+    --certificate-identity-regexp "$COSIGN_CHANNEL_IDENTITY_RE" \
+    --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+    "$doc" >/dev/null 2>&1; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: cosign FAILED to verify ${doc} against the pinned channel identity — refusing to trust it" >&2
+    exit "$AUSPEX_VERIFY_EX_COSIGN"
+  fi
+  # A null tag is an unset channel; any other value must be a vX.Y.Z[-pre] tag the release workflow cuts.
+  if ! "$JQ_BIN" -e '
+    def tag: . == null or (type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"));
+    .schema == 1
+    and (.sequence | type == "number" and . >= 1 and . == floor and . < 9007199254740992)
+    and (.latest | tag) and (.stable | tag) and (.minimum | tag)
+    and (.minimum == null or .stable != null)' "$doc" >/dev/null 2>&1; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: ${doc} is signed but isn't a schema-1 channel document — refusing to trust it" >&2
+    exit "$AUSPEX_VERIFY_EX_CHANNEL_INVALID"
+  fi
+  seq="$("$JQ_BIN" -r '.sequence' "$doc")"
+  if [ -n "$min_seq" ] && [ "$seq" -lt "$min_seq" ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: channel document sequence ${seq} is below ${min_seq}, the last one accepted — refusing a replayed document" >&2
+    exit "$AUSPEX_VERIFY_EX_CHANNEL_REPLAY"
+  fi
+  [ -n "$COSIGN_CLEANUP" ] && rm -f "$COSIGN_CLEANUP"
+  [ -n "$JQ_CLEANUP" ] && rm -f "$JQ_CLEANUP"
+  CHANNEL_SEQUENCE="$seq"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: channel document verified (sequence ${seq}, signed by the pinned channel identity)"
 }
