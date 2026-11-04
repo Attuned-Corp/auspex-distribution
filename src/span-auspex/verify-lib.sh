@@ -66,9 +66,8 @@ AUSPEX_VERIFY_EX_CHANNEL_REPLAY=19  # the channel document's sequence is below t
 COSIGN_IDENTITY_RE='^https://github\.com/(?i:attuned-corp)/auspex/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
 
-# Pinned identity for the release channel document (auspex ADR 0066): publish-release.yml on main. It is
-# disjoint from COSIGN_IDENTITY_RE, so a channel signature never verifies as a release artifact or the
-# reverse. The reconcile guard fails CI if it drifts from auspex's COSIGN_CHANNEL_IDENTITY_REGEXP.
+# Signer of the release channel document (auspex ADR 0066), disjoint from COSIGN_IDENTITY_RE so neither
+# signature verifies as the other. The reconcile guard diffs it against auspex's COSIGN_CHANNEL_IDENTITY_REGEXP.
 COSIGN_CHANNEL_IDENTITY_RE='^https://github\.com/(?i:attuned-corp)/auspex/\.github/workflows/publish-release\.yml@refs/heads/main$'
 
 # Self-provisioned cosign: verify: cosign needs no pre-installed CLI. When cosign is not on PATH we download
@@ -201,6 +200,10 @@ ensure_cosign() {
     COSIGN_BIN="cosign"
     return 0
   fi
+  if [ -n "$COSIGN_CLEANUP" ] && [ -x "$COSIGN_CLEANUP" ]; then # downloaded and hash-checked earlier this run
+    COSIGN_BIN="$COSIGN_CLEANUP"
+    return 0
+  fi
   local os arch expected
   case "$(uname -s | tr '[:upper:]' '[:lower:]')" in
     linux) os="linux" ;;
@@ -254,6 +257,10 @@ JQ_CLEANUP=""
 ensure_jq() {
   if command -v jq >/dev/null 2>&1; then
     JQ_BIN="jq"
+    return 0
+  fi
+  if [ -n "$JQ_CLEANUP" ] && [ -x "$JQ_CLEANUP" ]; then # downloaded and hash-checked earlier this run
+    JQ_BIN="$JQ_CLEANUP"
     return 0
   fi
   local os arch expected
@@ -513,11 +520,10 @@ verify_cosign_bundle() { # <file> <bundle_src>
   echo "${AUSPEX_VERIFY_LOG_PREFIX}: cosign-verified (${file} signature valid for the pinned release identity)"
 }
 
-# Verify the release channel document (auspex ADR 0066), which names the `latest`, `stable` and `minimum`
-# versions: cosign-verify it against the pinned CHANNEL identity, then require a schema-1 document with
-# well-formed tags. With --min-sequence N it also refuses a `sequence` below N, so a caller that records the
-# last sequence it accepted can refuse a replayed older document (ADR 0066 §3). <doc> and <bundle> are local
-# paths. Sets CHANNEL_SEQUENCE.
+# Verify the release channel document (auspex ADR 0066) against the pinned CHANNEL identity, then require
+# schema 1, well-formed tags and `minimum` <= `stable`, as auspex's own reader does. --min-sequence N refuses
+# a lower `sequence`, a replay (ADR 0066 §3). Sets CHANNEL_SEQUENCE. It keeps a downloaded cosign or jq for
+# the caller's next verify: run verify_lib_cleanup when done (a `trap … EXIT` also covers a refusal).
 CHANNEL_SEQUENCE=""
 verify_channel_document() { # <doc> <bundle> [--min-sequence N]
   if [ "$#" -lt 2 ]; then
@@ -535,7 +541,8 @@ verify_channel_document() { # <doc> <bundle> [--min-sequence N]
             exit "$AUSPEX_VERIFY_EX_USAGE"
             ;;
         esac
-        min_seq="$2"
+        min_seq="$(printf '%s' "$2" | sed 's/^0*//')" # JSON numbers can't have leading zeros
+        min_seq="${min_seq:-0}"
         shift 2
         ;;
       *)
@@ -560,23 +567,49 @@ verify_channel_document() { # <doc> <bundle> [--min-sequence N]
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: cosign FAILED to verify ${doc} against the pinned channel identity — refusing to trust it" >&2
     exit "$AUSPEX_VERIFY_EX_COSIGN"
   fi
-  # A null tag is an unset channel; any other value must be a vX.Y.Z[-pre] tag the release workflow cuts.
+  # vlt is SemVer 2.0.0 precedence: numeric parts compare as numbers, and a pre-release sorts below its
+  # release; within pre-releases, numeric identifiers sort below alphanumeric ones and compare as numbers.
+  # shellcheck disable=SC2016  # $a/$b/$x/$y/$d are jq variables, deliberately single-quoted (not shell)
   if ! "$JQ_BIN" -e '
     def tag: . == null or (type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"));
+    def parts: capture("^v(?<core>[0-9]+\\.[0-9]+\\.[0-9]+)(-(?<pre>.+))?$")
+      | {core: (.core | split(".") | map(tonumber)), pre: (if .pre then .pre | split(".") else [] end)};
+    def num: test("^[0-9]+$");
+    def idlt($a; $b):
+      if ($a | num) and ($b | num) then ($a | tonumber) < ($b | tonumber)
+      elif ($a | num) or ($b | num) then ($a | num)
+      else $a < $b end;
+    def prelt($a; $b):
+      if $a == $b or $a == [] then false
+      elif $b == [] then true
+      else [range(0; [($a | length), ($b | length)] | min) | select($a[.] != $b[.])] as $d
+        | if $d == [] then ($a | length) < ($b | length) else idlt($a[$d[0]]; $b[$d[0]]) end
+      end;
+    def vlt($x; $y):
+      ($x | parts) as $a | ($y | parts) as $b
+      | if $a.core != $b.core then $a.core < $b.core else prelt($a.pre; $b.pre) end;
     .schema == 1
     and (.sequence | type == "number" and . >= 1 and . == floor and . < 9007199254740992)
     and (.latest | tag) and (.stable | tag) and (.minimum | tag)
-    and (.minimum == null or .stable != null)' "$doc" >/dev/null 2>&1; then
+    and (.minimum == null or (.stable != null and (vlt(.stable; .minimum) | not)))' "$doc" >/dev/null 2>&1; then
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: ${doc} is signed but isn't a schema-1 channel document — refusing to trust it" >&2
     exit "$AUSPEX_VERIFY_EX_CHANNEL_INVALID"
   fi
   seq="$("$JQ_BIN" -r '.sequence' "$doc")"
-  if [ -n "$min_seq" ] && [ "$seq" -lt "$min_seq" ]; then
+  # Compared in jq: the shell's -lt errors past 64 bits, and inside an if that error would accept.
+  # shellcheck disable=SC2016  # $min is a jq --argjson variable, deliberately single-quoted (not shell)
+  if [ -n "$min_seq" ] && ! "$JQ_BIN" -e --argjson min "$min_seq" '.sequence >= $min' "$doc" >/dev/null 2>&1; then
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: channel document sequence ${seq} is below ${min_seq}, the last one accepted — refusing a replayed document" >&2
     exit "$AUSPEX_VERIFY_EX_CHANNEL_REPLAY"
   fi
-  [ -n "$COSIGN_CLEANUP" ] && rm -f "$COSIGN_CLEANUP"
-  [ -n "$JQ_CLEANUP" ] && rm -f "$JQ_CLEANUP"
   CHANNEL_SEQUENCE="$seq"
   echo "${AUSPEX_VERIFY_LOG_PREFIX}: channel document verified (sequence ${seq}, signed by the pinned channel identity)"
+}
+
+# For callers of verify_channel_document, which keeps the cosign or jq it downloaded.
+verify_lib_cleanup() {
+  [ -z "$COSIGN_CLEANUP" ] || rm -f "$COSIGN_CLEANUP"
+  [ -z "$JQ_CLEANUP" ] || rm -f "$JQ_CLEANUP"
+  COSIGN_CLEANUP=""
+  JQ_CLEANUP=""
 }

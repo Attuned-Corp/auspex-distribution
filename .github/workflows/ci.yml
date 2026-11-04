@@ -42,8 +42,6 @@ jobs:
       - name: install + bootstrap download-verify contract
         run: make verify-test
 
-      # verify_channel_document against real signed fixtures: the channel document passes, and a tampered
-      # document, the wrong signer, the release identity and a replayed sequence each fail.
       - name: release channel document verify contract
         run: make channel-verify-test
 

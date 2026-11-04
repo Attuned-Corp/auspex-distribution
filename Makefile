@@ -8,8 +8,7 @@
 verify-test:
 	@./tests/install-verify-test.sh
 
-# Release channel document verify contract (auspex ADR 0066): real cosign over real signed fixtures (the
-# channel document, and a release manifest as the wrong signer), plus the schema checks under a stub cosign.
+# Release channel document verify contract (auspex ADR 0066): real cosign over real signed fixtures.
 # Downloads the pinned cosign and jq when they're not on PATH.
 .PHONY: channel-verify-test
 channel-verify-test:
