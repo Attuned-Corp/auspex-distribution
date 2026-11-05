@@ -282,8 +282,9 @@ platform's binary has its own sha256.
 **SHA-256** (`JQ_SHA256_linux_amd64` / `_linux_arm64` / `_macos_amd64` / `_macos_arm64`), which the cosign
 tier auto-provisions to parse the signed manifest (bash only — the PowerShell installer parses it with
 native JSON); and the Sigstore **`trusted_root.json`** beside it. These pins are the **single source of
-truth** shared by the Feature, the `curl|sh` + PowerShell bootstrap, and the MDM gate; the `reconcile-trust`
-guard fails CI if `COSIGN_VERSION` / the identity / the issuer drift from the auspex signer's descriptor.
+truth** shared by the Feature, the `curl|sh` + PowerShell bootstrap, and the MDM gate; the `reconcile`
+CI job fails if `COSIGN_VERSION`, either identity (the release identity or the channel identity) or the issuer
+drifts from the auspex signer's descriptor.
 Keep `COSIGN_VERSION` in lock-step with the **signer** — the auspex repo's `Makefile.setup.mk`
 `COSIGN_VERSION`, the version the release workflow signs with — and bump them together:
 
@@ -575,7 +576,7 @@ closed (nothing installed) and a matching one installs — the fast gate that ru
 [`ci.yml`](./.github/workflows/ci.yml)). It also proves the pinned-cosign hash gate refuses a tampered
 downloaded cosign.
 
-Two more workflows guard the trust surface: [`reconcile-trust.yml`](./.github/workflows/reconcile-trust.yml)
+Two more checks guard the trust surface: the `reconcile` job in [`ci.yml`](./.github/workflows/ci.yml)
 diffs this repo's verifier config against the auspex signer's descriptor at a pinned ref (AC5), and
 [`release-bootstrap.yml`](./.github/workflows/release-bootstrap.yml) assembles + cosign-signs the installers
 and cuts a Release.

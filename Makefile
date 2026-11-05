@@ -8,6 +8,12 @@
 verify-test:
 	@./tests/install-verify-test.sh
 
+# Release channel document verify contract (auspex ADR 0066): real cosign over real signed fixtures.
+# Downloads the pinned cosign and jq when they're not on PATH.
+.PHONY: channel-verify-test
+channel-verify-test:
+	@./tests/channel-verify-test.sh
+
 # PowerShell installer contract: the shipped .ps1 scripts are ASCII (Windows PowerShell 5.1 misreads BOM-less
 # UTF-8) and parse, and bootstrap.ps1's release-version gate that decides auspexw.exe compares versions
 # numerically (0.10.0 > 0.9.1) with pre-releases counting as their base version. Needs pwsh.
@@ -28,7 +34,7 @@ shellcheck:
 	@shellcheck -x src/span-auspex/verify-lib.sh src/span-auspex/install.sh \
 		cursor-cloud/install.sh cursor-cloud/start.sh cursor-cloud/preflight.sh \
 		claude-cloud/install.sh claude-cloud/session-start.sh claude-cloud/preflight.sh \
-		bootstrap/bootstrap.sh bootstrap/assemble.sh mdm/verify-gate.sh tests/install-verify-test.sh
+		bootstrap/bootstrap.sh bootstrap/assemble.sh mdm/verify-gate.sh tests/install-verify-test.sh tests/channel-verify-test.sh
 
 # Docker-backed behavioural smoke of the Feature is a follow-up in this repo (it needs a built auspex
 # binary, which the private auspex repo produces). Until it is reconstituted here, run it from a checkout
@@ -47,6 +53,7 @@ validate-changelog-test:
 help:
 	@echo "Targets:"
 	@echo "  verify-test               installer + bootstrap download-verify contract (pure bash+HTTP; the PR gate)"
+	@echo "  channel-verify-test       release channel document verify contract (real cosign; ADR 0066)"
 	@echo "  ps1-test                  PowerShell installers ASCII + parse, auspexw version gate (needs pwsh)"
 	@echo "  assemble                  build dist/auspex-install.sh|.ps1 from the shared recipe (Release assets)"
 	@echo "  shellcheck                lint all shell scripts"
