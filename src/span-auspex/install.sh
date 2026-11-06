@@ -20,6 +20,9 @@ HOOK_SCOPE="${HOOKSCOPE:-user}"
 # install lands at the canonical /usr/local paths.
 SHARE_DIR="${AUSPEX_SHARE_DIR:-/usr/local/share/auspex}"
 BIN_DEST="${AUSPEX_BIN_DEST:-/usr/local/bin/auspex}"
+# auspex-capture, the capture-only binary hooks run (auspex 0.13.0 and later), goes beside auspex: `auspex
+# install` looks for it there, and links it to auspex when it is missing (hooks still capture, more slowly).
+CAPTURE_DEST="$(dirname "$BIN_DEST")/auspex-capture"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Verification recipe + pinned trust material (identity regex, OIDC issuer, cosign pins, trusted_root.json,
@@ -91,7 +94,25 @@ case "$BINARY_URI" in
       echo "auspex feature: acquiring binary (verify: ${VERIFY}) for ${BINARY_URI}"
       acquire_verified "$BINARY_URI" "$VERIFY" "$dl_tmp"
     fi
+    # auspex-capture is acquired the same way before either binary is placed, so a failed verify leaves
+    # nothing installed. A digest pin names one artifact.
+    cap_tmp=""
+    if [ -n "$DIGEST" ]; then
+      echo "auspex feature: note — a 'digest' pin installs auspex only; auspex install links auspex-capture to it (slower hooks)" >&2
+    else
+      resolve_capture_url "$BINARY_URI" # sets CAPTURE_URL, or leaves it empty with a note
+      if [ -n "$CAPTURE_URL" ]; then
+        cap_tmp="$(mktemp)"
+        echo "auspex feature: acquiring binary (verify: ${VERIFY}) for ${CAPTURE_URL}"
+        acquire_verified "$CAPTURE_URL" "$VERIFY" "$cap_tmp"
+      fi
+    fi
     mv "$dl_tmp" "$BIN_DEST"
+    # mv renames over a placeholder link a previous install may have left, rather than writing through it.
+    if [ -n "$cap_tmp" ]; then
+      chmod 0755 "$cap_tmp"
+      mv -f "$cap_tmp" "$CAPTURE_DEST"
+    fi
     ;;
   *)
     # A plain in-container path is a locally-present artifact — no network fetch, so the verify option does
@@ -113,6 +134,15 @@ case "$BINARY_URI" in
       echo "auspex feature: local binary matches pinned digest sha256:${_got}"
     fi
     cp "$BINARY_URI" "$BIN_DEST"
+    # A pre-staged auspex-capture beside the source path is copied too, unless a digest pins auspex alone.
+    # The old file or placeholder link is removed first, so cp can't write through a link into auspex.
+    capture_src="$(dirname "$BINARY_URI")/auspex-capture"
+    if [ -f "$capture_src" ] && [ -z "$DIGEST" ]; then
+      rm -f "$CAPTURE_DEST"
+      cp "$capture_src" "$CAPTURE_DEST"
+      chmod 0755 "$CAPTURE_DEST"
+      echo "auspex feature: copied ${capture_src}"
+    fi
     ;;
 esac
 chmod 0755 "$BIN_DEST"

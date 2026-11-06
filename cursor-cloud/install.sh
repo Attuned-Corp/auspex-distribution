@@ -59,6 +59,8 @@ fi
 #    (appinfo.SystemBinaryPath = /usr/local/bin/auspex) — skipped when already on PATH (a custom image baked
 #    it, or an e2e shim staged it). The bootstrap verifies the DOWNLOADED BINARY fail-closed against the
 #    embedded trust root, so a tampered/unsigned/wrong-version artifact aborts here (no capture wired).
+#    From auspex 0.13.0 on it also places auspex-capture, the binary hooks run, beside auspex; an image that
+#    bakes auspex alone gets a link to it from `hooks install` (slower hooks).
 #    Privileged installs place it at /usr/local/bin (via $SUDO) so the system-tier hook resolves it;
 #    unprivileged installs let the bootstrap use its user-writable default and wire the user tier below.
 if ! command -v auspex >/dev/null 2>&1; then

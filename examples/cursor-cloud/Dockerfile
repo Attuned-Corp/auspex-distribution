@@ -15,7 +15,8 @@ RUN apt-get update \
 
 # Fetch + verify the pinned signed binary at build. AUSPEX_BASE_URL is your download host; pass it with
 #   "build": { "args": { "AUSPEX_BASE_URL": "https://…" } }  in environment.docker.json, or --build-arg.
-ARG AUSPEX_VERSION=v0.1.0
+# v0.13.0 or later also installs auspex-capture, the capture-only binary hooks run, beside auspex.
+ARG AUSPEX_VERSION=v0.13.0
 ARG AUSPEX_BASE_URL
 ARG AUSPEX_VERIFY=cosign
 # The bootstrap installer lives on its OWN version-resolving release (latest/download), independent of the

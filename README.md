@@ -62,6 +62,13 @@ curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/d
 & ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -BaseUrl <your-auspex-distribution-host> -Digest sha256:<64-hex>
 ```
 
+On macOS and Linux, from auspex 0.13.0 on, the installer also places **`auspex-capture`** beside `auspex`,
+verified the same way: the small capture-only program coding tools run on every event, which starts in about
+half the time of `auspex`. `auspex install` picks it up from there. It is required from 0.13.0 on: if it is
+missing or doesn't verify, the install fails and places neither binary. A release before 0.13.0 installs
+`auspex` alone. A `--digest` pin installs `auspex` only: put `auspex-capture` beside it (it has its own
+digest in the signed manifest), or `auspex install` links it to `auspex` and hooks capture more slowly.
+
 On Windows the installer also places **`auspexw.exe`** beside `auspex.exe`, verified the same way: the
 windowless build of auspex that coding tools run on every event (the `python.exe` / `pythonw.exe` pairing —
 it opens no console window, so each hook is about a third faster). `auspex install` picks it up from there. It
@@ -142,7 +149,7 @@ below). A copy-paste starting point lives in [`examples/devcontainer.json`](./ex
       // blob store (auto-provisions cosign + jq; no Sigstore network) — it needs egress to github.com. Use
       // verify: checksum for a no-egress SHA-256-only check against the .sha256 sidecar.
       "binaryUri": "https://<your-auspex-download-host>/releases/{{version}}/linux/amd64/auspex",
-      "version": "v0.1.0"
+      "version": "v0.13.0" // 0.13.0 or later also installs auspex-capture, the faster binary hooks run
     }
   },
   // Enrollment credentials are ENV, sourced from the platform — never committed literals.
@@ -157,7 +164,7 @@ below). A copy-paste starting point lives in [`examples/devcontainer.json`](./ex
 ```
 
 > **Two independent version numbers.** The `span-auspex:0.3.0` in the Feature ref is the **Feature's** own
-> version (what ghcr serves); the `version` option (`v0.1.0` above) is the **auspex binary release tag**
+> version (what ghcr serves); the `version` option (`v0.13.0` above) is the **auspex binary release tag**
 > substituted into `binaryUri`. They advance on separate cadences — pin each to the value you want.
 
 > **Contributing to the Feature itself?** Reference the source in-tree instead of the published ref —
@@ -190,6 +197,7 @@ is provided at onboarding — shown here as `<your-auspex-download-host>`) under
 ```
 https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe]        # raw binary (one-hop human path)
 https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe].sha256 # its checksum sidecar (verify: checksum)
+https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex-capture       # macOS/Linux capture-only binary, 0.13.0 and later (+ .sha256)
 https://<your-auspex-download-host>/releases/<version>/manifest.json                   # + .cosign.bundle — signed version→digest index (verify: cosign)
 https://<your-auspex-download-host>/releases/<version>/checksums.txt                   # + .cosign.bundle (signed digest list)
 https://<your-auspex-download-host>/blobs/sha256/<digest>                              # content-addressed artifact bytes (verify: cosign installs here)
@@ -197,6 +205,13 @@ https://<your-auspex-download-host>/blobs/sha256/<digest>                       
 
 So a devcontainer pins a release with `version` + a templated `binaryUri` (see [Usage](#usage)):
 `https://<your-auspex-download-host>/releases/{{version}}/linux/amd64/auspex`.
+
+**`auspex-capture` (auspex 0.13.0 and later).** When `binaryUri` is a `…/releases/<version>/<os>/<arch>/auspex`
+URL for 0.13.0 or later, the Feature also fetches `auspex-capture` from the same directory, checks it with
+the same `verify` mode, and places it beside `auspex`. Coding-tool hooks run it on every event. A missing
+or unverified one fails the install. For an in-container path, an `auspex-capture` beside it is copied too.
+A `digest` pin installs `auspex` alone. Without `auspex-capture`, `auspex install` links it to `auspex`:
+hooks still capture, but each event starts the full binary.
 
 ### Verifying the download
 

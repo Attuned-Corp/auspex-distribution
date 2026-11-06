@@ -1,6 +1,6 @@
 {
   "id": "span-auspex",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "name": "Span Auspex Capture",
   "documentationURL": "https://github.com/Attuned-Corp/auspex-distribution",
   "description": "Installs the auspex capture agent and runs it under the auspex-owned supervisor (no OS service manager), the posture for ephemeral dev containers and cloud agents. onCreate does a service-free, idempotent cold install (wires detected coding tools + arms the cold-start capture relax); postStart (re)launches `auspex daemon --supervise` so the worker is respawned and drained on the orchestrator's resume/stop.",
@@ -8,7 +8,7 @@
     "binaryUri": {
       "type": "string",
       "default": "",
-      "description": "Where to obtain the auspex binary. An http(s):// URL is downloaded; any other value is treated as a path already present in the container and copied. Empty fails the install with guidance — distribution is intentionally pluggable and has no default source yet."
+      "description": "Where to obtain the auspex binary. An http(s):// URL is downloaded; any other value is treated as a path already present in the container and copied. Empty fails the install with guidance — distribution is intentionally pluggable and has no default source yet. For auspex 0.13.0 and later, the auspex-capture binary in the same release directory (or beside the path) is placed too, verified the same way."
     },
     "version": {
       "type": "string",

@@ -62,6 +62,8 @@ fi
 #    (appinfo.SystemBinaryPath = /usr/local/bin/auspex) — skipped when already on PATH (a custom image baked
 #    it, or an e2e shim staged it). The bootstrap verifies the DOWNLOADED BINARY fail-closed against the
 #    embedded trust root, so a tampered/unsigned/wrong-version artifact aborts here (no capture wired).
+#    From auspex 0.13.0 on it also places auspex-capture, the binary hooks run, beside auspex; an image that
+#    bakes auspex alone gets a link to it from `hooks install` (slower hooks).
 if ! command -v auspex >/dev/null 2>&1; then
   : "${AUSPEX_BASE_URL:?set AUSPEX_BASE_URL to your auspex download host (https://…) as an environment/team secret the setup phase can see}"
   curl -fsSL "$BOOTSTRAP_URL" -o /tmp/auspex-install.sh

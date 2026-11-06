@@ -43,7 +43,8 @@ DIGEST="${AUSPEX_DIGEST:-}"         # pin a raw sha256 (of the artifact) — ins
 
 usage() {
   cat >&2 <<EOF
-auspex install — fetch, verify, and install the auspex binary.
+auspex install — fetch, verify, and install the auspex binary, and from auspex 0.13.0 on the
+auspex-capture binary its hooks run, beside it.
 
   --version <tag>     auspex release tag to install (e.g. v0.1.0). Optional: when omitted (and no
                       --url/--digest), resolves the CDN's 'latest' pointer to a concrete tag, then verifies.
@@ -51,7 +52,8 @@ auspex install — fetch, verify, and install the auspex binary.
   --base-url <url>    artifact source base — REQUIRED unless --url (your auspex distribution host / mirror)
   --url <url>         full binary URL (overrides --base-url/--version/os/arch derivation)
   --digest <sha256>   pin by content: install <base-url>/blobs/sha256/<digest> directly and self-verify
-                      (version-free — survives a re-tag; needs --base-url, or --url to derive the host)
+                      (version-free — survives a re-tag; needs --base-url, or --url to derive the host).
+                      Installs auspex only.
   --bin-dir <dir>     install dir (default: /usr/local/bin if writable, else \$HOME/.local/bin)
   -h, --help          this help
 
@@ -156,11 +158,13 @@ mkdir -p "$BIN_DIR" 2>/dev/null || {
   exit "$AUSPEX_VERIFY_EX_ENV"
 }
 BIN_DEST="${BIN_DIR%/}/auspex"
+CAPTURE_DEST="${BIN_DIR%/}/auspex-capture"
 
 # --- fetch → verify (fail-closed) → place ----------------------------------------------------------------
-# Clean up the download temp AND (in the assembled release form) the embedded trust-root temp on any exit.
+# Clean up the download temps AND (in the assembled release form) the embedded trust-root temp on any exit.
 dl_tmp=""
-_boot_cleanup() { rm -f "${dl_tmp:-}" "${_AUSPEX_EMBEDDED_ROOT:-}"; }
+cap_tmp=""
+_boot_cleanup() { rm -f "${dl_tmp:-}" "${cap_tmp:-}" "${_AUSPEX_EMBEDDED_ROOT:-}"; }
 trap _boot_cleanup EXIT
 
 dl_tmp="$(mktemp)"
@@ -176,10 +180,30 @@ else
   acquire_verified "$BINARY_URL" "$VERIFY" "$dl_tmp"
 fi
 
+# auspex-capture, the capture-only binary hooks run (auspex 0.13.0 and later), is acquired the same way before
+# either binary is placed, so a failed verify leaves nothing installed. A digest pin names one artifact.
+if [ -n "$DIGEST" ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: note — a --digest pin installs auspex only; for 0.13.0 and later put auspex-capture beside it (its own digest is in the signed manifest), or \`auspex install\` links it to auspex (slower hooks)" >&2
+else
+  resolve_capture_url "$BINARY_URL" # sets CAPTURE_URL, or leaves it empty with a note
+  if [ -n "$CAPTURE_URL" ]; then
+    cap_tmp="$(mktemp)"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: acquiring binary (verify: ${VERIFY}) for ${CAPTURE_URL}"
+    acquire_verified "$CAPTURE_URL" "$VERIFY" "$cap_tmp"
+  fi
+fi
+
 chmod 0755 "$dl_tmp"
 mv "$dl_tmp" "$BIN_DEST"
 dl_tmp="" # moved into place; nothing to clean
 echo "${AUSPEX_VERIFY_LOG_PREFIX}: installed ${BIN_DEST}"
+if [ -n "$cap_tmp" ]; then
+  # mv renames over a placeholder link `auspex install` may have left here, rather than writing through it.
+  chmod 0755 "$cap_tmp"
+  mv -f "$cap_tmp" "$CAPTURE_DEST"
+  cap_tmp=""
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: installed ${CAPTURE_DEST}"
+fi
 case ":${PATH}:" in
   *":${BIN_DIR%/}:"*) ;;
   *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: note — ${BIN_DIR} is not on your PATH; add it (e.g. export PATH=\"${BIN_DIR}:\$PATH\")" >&2 ;;

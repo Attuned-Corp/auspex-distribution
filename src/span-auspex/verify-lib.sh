@@ -315,25 +315,81 @@ _require_trusted_root() {
   fi
 }
 
+# The manifest media type of a raw binary, by its file name and os (auspex ADR 0068): `auspex` is the sole
+# application/octet-stream per os/arch, and the capture-only `auspex-capture` is indexed under the platform's
+# executable type so that selector stays unique. Any other name keeps the octet-stream lookup.
+raw_binary_media_type() { # <file-name> <os>
+  case "$1:$2" in
+    auspex-capture:darwin) printf 'application/x-mach-binary' ;;
+    auspex-capture:linux) printf 'application/x-executable' ;;
+    *) printf 'application/octet-stream' ;;
+  esac
+}
+
 # Resolve the raw-binary digest for a version-path URL from the SIGNED manifest (verify: cosign — auspex
-# ADR 0047). From .../releases/<v>/<os>/<arch>/auspex[.exe] we derive the version root, tag, os and arch;
+# ADR 0047). From .../releases/<v>/<os>/<arch>/<name> we derive the version root, tag, os and arch;
 # fetch + keyless-verify the version→digest index (manifest.json) against the pinned identity +
 # trusted_root.json; ASSERT its version annotation equals the requested tag (this is what closes the
 # version-substitution gap — the manifest is cryptographically bound to <v>, not merely to "some semver
-# tag"); then read the unique application/octet-stream descriptor for this os/arch and emit its bare-hex
+# tag"); then read the unique descriptor of <name>'s media type for this os/arch and emit its bare-hex
 # sha256. Sets RESOLVED_DIGEST (a global, so no command-substitution captures the progress echoes). Parsing
 # uses jq (auto-provisioned + pinned); the descriptor lookup requires EXACTLY ONE match and a 64-hex digest,
-# else it fails closed (an ambiguous or absent binding must never resolve).
+# else it fails closed (an ambiguous or absent binding must never resolve). A verified manifest is kept in
+# memory for its version root, so resolving auspex-capture after auspex re-verifies nothing.
 RESOLVED_DIGEST=""
+_VERIFIED_MANIFEST_ROOT=""
+_VERIFIED_MANIFEST_JSON=""
 resolve_binary_digest() { # <version_url>
-  local url="$1" ver_root version os arch manifest bundle m_version digest
-  ensure_cosign
-  ensure_jq
-  _require_trusted_root
+  local url="$1" ver_root version os arch media digest
   ver_root="$(dirname "$(dirname "$(dirname "$url")")")" # .../releases/<v>
   version="$(basename "$ver_root")"
   arch="$(basename "$(dirname "$url")")"
   os="$(basename "$(dirname "$(dirname "$url")")")"
+  media="$(raw_binary_media_type "$(basename "$url")" "$os")"
+  if [ "$_VERIFIED_MANIFEST_ROOT" = "$ver_root" ]; then
+    ensure_jq
+  else
+    _verify_release_manifest "$ver_root" "$version"
+  fi
+  # The RAW BINARY is the sole descriptor of its media type for a platform (archives/packages carry their
+  # own media types), so (media type + os + arch) is a unique key. Require exactly one match.
+  # shellcheck disable=SC2016  # $media/$os/$arch are jq --arg variables, deliberately single-quoted (not shell)
+  digest="$(printf '%s' "$_VERIFIED_MANIFEST_JSON" | "$JQ_BIN" -r --arg media "$media" --arg os "$os" --arg arch "$arch" '
+    [ .manifests[]
+      | select(.mediaType == $media
+        and .platform.os == $os
+        and .platform.architecture == $arch) ]
+    | if length == 1 then .[0].digest else empty end' 2>/dev/null)"
+  [ -n "$COSIGN_CLEANUP" ] && rm -f "$COSIGN_CLEANUP"
+  [ -n "$JQ_CLEANUP" ] && rm -f "$JQ_CLEANUP"
+  case "$digest" in
+    sha256:*) digest="${digest#sha256:}" ;;
+    *)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the signed manifest has no unique raw-binary (${media}) descriptor for ${os}/${arch} — refusing to install" >&2
+      exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+      ;;
+  esac
+  case "$digest" in
+    *[!0-9a-f]* | "")
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the resolved digest '${digest}' is not a bare sha256 hex — refusing to install" >&2
+      exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+      ;;
+  esac
+  if [ "${#digest}" -ne 64 ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: the resolved digest '${digest}' is not 64 hex chars — refusing to install" >&2
+    exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+  fi
+  RESOLVED_DIGEST="$digest"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved ${version} ${os}/${arch} $(basename "$url") → sha256:${digest} (signed manifest verified)"
+}
+
+# Fetch + keyless-verify <ver_root>/manifest.json and assert its version annotation is <version>; on success
+# keep its bytes in _VERIFIED_MANIFEST_JSON (fails closed otherwise). Leaves cosign/jq for the caller to clean.
+_verify_release_manifest() { # <ver_root> <version>
+  local ver_root="$1" version="$2" manifest bundle m_version
+  ensure_cosign
+  ensure_jq
+  _require_trusted_root
   manifest="$(mktemp)"
   bundle="$(mktemp)"
   if ! fetch "${ver_root}/manifest.json" "$manifest" || ! fetch "${ver_root}/manifest.json.cosign.bundle" "$bundle"; then
@@ -357,37 +413,43 @@ resolve_binary_digest() { # <version_url>
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: the signed manifest is for '${m_version:-<none>}' but the requested path is version '${version}' — refusing (version substitution)" >&2
     exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
   fi
-  # The RAW BINARY is the sole application/octet-stream descriptor for a platform (archives/packages carry
-  # their own media types), so (octet-stream + os + arch) is a unique key. Require exactly one match.
-  # shellcheck disable=SC2016  # $os/$arch are jq --arg variables, deliberately single-quoted (not shell)
-  digest="$("$JQ_BIN" -r --arg os "$os" --arg arch "$arch" '
-    [ .manifests[]
-      | select(.mediaType == "application/octet-stream"
-        and .platform.os == $os
-        and .platform.architecture == $arch) ]
-    | if length == 1 then .[0].digest else empty end' "$manifest" 2>/dev/null)"
+  _VERIFIED_MANIFEST_JSON="$(cat "$manifest")"
+  _VERIFIED_MANIFEST_ROOT="$ver_root"
   rm -f "$manifest" "$bundle"
-  [ -n "$COSIGN_CLEANUP" ] && rm -f "$COSIGN_CLEANUP"
-  [ -n "$JQ_CLEANUP" ] && rm -f "$JQ_CLEANUP"
-  case "$digest" in
-    sha256:*) digest="${digest#sha256:}" ;;
-    *)
-      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the signed manifest has no unique raw-binary (application/octet-stream) descriptor for ${os}/${arch} — refusing to install" >&2
-      exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
-      ;;
-  esac
-  case "$digest" in
-    *[!0-9a-f]* | "")
-      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the resolved digest '${digest}' is not a bare sha256 hex — refusing to install" >&2
-      exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
-      ;;
-  esac
-  if [ "${#digest}" -ne 64 ]; then
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: the resolved digest '${digest}' is not 64 hex chars — refusing to install" >&2
-    exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+}
+
+# auspex-capture, the capture-only binary coding-tool hooks run on macOS and Linux (auspex ADR 0068), ships
+# in every release from this version on (its pre-releases included) and in none before it.
+AUSPEX_CAPTURE_SINCE="0.13.0"
+
+# Decide whether to install auspex-capture beside the auspex at <auspex_version_url>. Sets CAPTURE_URL to the
+# capture binary's URL in the same release directory, or leaves it empty, with a note, when the release
+# predates it or the URL isn't a .../releases/<v>/<os>/<arch>/auspex path. From AUSPEX_CAPTURE_SINCE on the
+# caller must acquire it like auspex (fail-closed): a missing one there is a broken or tampered release.
+# Without it, `auspex install` links auspex-capture to auspex, so hooks still capture, more slowly.
+CAPTURE_URL=""
+resolve_capture_url() { # <auspex_version_url>
+  local url="$1" re='/releases/v?([0-9]+)\.([0-9]+)\.([0-9]+)[^/]*/[^/]+/[^/]+/auspex$' since s_major s_minor s_patch
+  CAPTURE_URL=""
+  if ! [[ "$url" =~ $re ]]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: note — ${url} is not a .../releases/<version>/<os>/<arch>/auspex path, so auspex-capture is not fetched; \`auspex install\` links it to auspex (slower hooks)" >&2
+    return 0
   fi
-  RESOLVED_DIGEST="$digest"
-  echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved ${version} ${os}/${arch} → sha256:${digest} (signed manifest verified)"
+  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+  IFS=. read -r s_major s_minor s_patch <<<"$AUSPEX_CAPTURE_SINCE"
+  since=0
+  if [ "$major" -ne "$s_major" ]; then
+    [ "$major" -gt "$s_major" ] && since=1
+  elif [ "$minor" -ne "$s_minor" ]; then
+    [ "$minor" -gt "$s_minor" ] && since=1
+  else
+    [ "$patch" -ge "$s_patch" ] && since=1
+  fi
+  if [ "$since" -eq 0 ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: release ${major}.${minor}.${patch} predates auspex-capture (${AUSPEX_CAPTURE_SINCE}) — installing auspex alone"
+    return 0
+  fi
+  CAPTURE_URL="${url%/auspex}/auspex-capture"
 }
 
 # Fetch an artifact from the global content-addressed blob namespace and SELF-VERIFY (verify: cosign — auspex

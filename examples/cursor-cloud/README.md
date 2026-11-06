@@ -168,7 +168,9 @@ placement tier (no double-capture).
   `AUSPEX_VERSION` binary tag it passes through as `--version`), which fetches the pinned binary from
   `AUSPEX_BASE_URL` and **cosign-verifies it against an offline embedded trust root before execution** — a
   tampered/unsigned/wrong-version artifact fails closed (no capture wired). A custom image (Dockerfile
-  variant) bakes this at build so the run-phase skips the download.
+  variant) bakes this at build so the run-phase skips the download. From auspex 0.13.0 on it also places
+  `auspex-capture`, the small program hooks run, beside `auspex`. A custom image that bakes `auspex` some
+  other way should bake `auspex-capture` beside it, or hooks run the slower full binary.
 - **Single hook tier (no double-capture).** `install.sh` runs the shipped placement primitive
   `auspex hooks install --system`, wiring the **system** tier (`/etc/cursor/hooks.json`) — the same primitive
   auspex's dev-container Feature uses. The install phase runs as root on a custom Dockerfile image and as a
