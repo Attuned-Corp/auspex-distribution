@@ -134,10 +134,10 @@ case "$BINARY_URI" in
       echo "auspex feature: local binary matches pinned digest sha256:${_got}"
     fi
     cp "$BINARY_URI" "$BIN_DEST"
-    # A pre-staged auspex-capture beside the source path is copied too, unless a digest pins auspex alone.
-    # The old file or placeholder link is removed first, so cp can't write through a link into auspex.
+    # A staged auspex-capture is copied unless a digest pins auspex alone or it is a placeholder link; the
+    # destination is removed first so cp can't write through a placeholder link into auspex.
     capture_src="$(dirname "$BINARY_URI")/auspex-capture"
-    if [ -f "$capture_src" ] && [ -z "$DIGEST" ]; then
+    if [ -f "$capture_src" ] && [ ! -L "$capture_src" ] && [ -z "$DIGEST" ]; then
       rm -f "$CAPTURE_DEST"
       cp "$capture_src" "$CAPTURE_DEST"
       chmod 0755 "$CAPTURE_DEST"

@@ -44,7 +44,7 @@ trap cleanup EXIT
 # only downloads → verifies → chmod → records; so its content just has to be stable and non-empty.
 printf 'fake-auspex-binary-%s' "$(date +%s)" >"$WEBROOT/auspex"
 GOOD_SUM="$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$WEBROOT/auspex"; else shasum -a 256 "$WEBROOT/auspex"; fi | awk '{print $1}')"
-# The capture-only binary releases ship from auspex 0.13.0 on: distinct bytes, so a mix-up is caught.
+# Distinct bytes from the auspex fixture, so a mix-up between the two is caught.
 printf 'fake-auspex-capture-binary-%s' "$(date +%s)" >"$WEBROOT/auspex-capture"
 CAP_SUM="$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$WEBROOT/auspex-capture"; else shasum -a 256 "$WEBROOT/auspex-capture"; fi | awk '{print $1}')"
 
@@ -147,9 +147,12 @@ check "verify-none-skips"       ok   none     none
 # DOWNLOADED cosign fails closed. The real cryptographic verify is covered by the Docker smoke / rc tag.
 STUB_DIR="$WORK/stubbin"
 mkdir -p "$STUB_DIR"
+COSIGN_CALLS="$STUB_DIR/cosign.calls" # one line per stub invocation, reset by each make_stub_cosign
 make_stub_cosign() { # <verify-blob exit code>
+  : >"$COSIGN_CALLS"
   {
     echo '#!/usr/bin/env bash'
+    echo "echo \"\$*\" >>'$COSIGN_CALLS'"
     echo "exit $1"
   } >"$STUB_DIR/cosign"
   chmod 0755 "$STUB_DIR/cosign"
@@ -484,10 +487,8 @@ else
 fi
 
 # ---- auspex-capture beside auspex (auspex 0.13.0 and later) -------------------------------------------
-# Releases from 0.13.0 on ship auspex-capture, the capture-only binary hooks run. Both installers must fetch
-# and verify it like auspex, before placing either, so a missing or tampered one fails closed with nothing
-# installed. An older release installs auspex alone. Placing it must replace a placeholder link that `auspex
-# install` leaves when the binary is missing, never write through it into auspex.
+# From 0.13.0 a missing or tampered auspex-capture fails closed with nothing placed; older releases install
+# auspex alone. Placing it replaces a placeholder link, never writing through it into auspex.
 CAP_RELDIR_OS_ARCH="linux/amd64"
 setup_capture_release() { # <version> <capture: good|bad|absent>
   local ver="$1" capture="$2" dir="$WEBROOT/releases/$1/${CAP_RELDIR_OS_ARCH}" cap_desc=""
@@ -533,9 +534,8 @@ JSON
   printf 'dummy-new-format-bundle\n' >"$WEBROOT/releases/$ver/manifest.json.cosign.bundle"
 }
 
-# <label> <expect ok|fail> <runner feature|boot|boot-digest> <verify-mode> <version> <capture good|bad|absent>
-#   <placed: both|auspex> [placeholder]
-# "placeholder" pre-seeds the destination with an old auspex and an auspex-capture link to it.
+# <label> <ok|fail> <feature|boot|boot-digest> <verify-mode> <version> <capture good|bad|absent> <both|auspex>
+# [placeholder] — "placeholder" pre-seeds an old auspex and an auspex-capture link to it.
 capture_check() {
   local label="$1" expect="$2" runner="$3" mode="$4" ver="$5" capture="$6" placed="$7" seed="${8:-}"
   local dest="$WORK/capdest" url rc=0 extra_path=""
@@ -609,6 +609,15 @@ capture_check "cap-boot-digest-pin"         ok   boot-digest none     v0.13.0   
 if command -v jq >/dev/null 2>&1; then
   capture_check "cap-feature-cosign"        ok   feature     cosign   v0.13.0     good   both
   capture_check "cap-boot-cosign"           ok   boot        cosign   v0.13.0     good   both   placeholder
+  # Both binaries resolve from the one signed manifest, verified once: a second verify would also re-download
+  # the pinned cosign wherever none is on PATH.
+  if [ "$(grep -c '^verify-blob' "$COSIGN_CALLS")" -eq 1 ]; then
+    echo "ok [cap-boot-cosign-verifies-once]: one manifest verify for both binaries"
+    pass=$((pass + 1))
+  else
+    echo "FAIL [cap-boot-cosign-verifies-once]: expected 1 cosign verify-blob call, got $(grep -c '^verify-blob' "$COSIGN_CALLS")" >&2
+    fail=$((fail + 1))
+  fi
   capture_check "cap-boot-cosign-tampered"  fail boot        cosign   v0.13.0     bad    both
   capture_check "cap-boot-cosign-no-desc"   fail boot        cosign   v0.13.0     absent both   # no x-executable descriptor
 else
@@ -629,6 +638,24 @@ cap_path_check() {
   if [ "$rc" -ne 0 ] || ! cmp -s "$WEBROOT/auspex" "$dest/auspex" || [ -L "$dest/auspex-capture" ] \
     || ! cmp -s "$WEBROOT/auspex-capture" "$dest/auspex-capture"; then
     echo "FAIL [$label]: expected both binaries copied, with the placeholder link replaced (rc=$rc)" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: feature ok as expected"
+  pass=$((pass + 1))
+
+  # A staged placeholder link (a directory where `auspex install` already ran) is not copied as a binary.
+  label="cap-feature-local-path-link"
+  rm -rf "$dest" "$WORK/share" "$staged/auspex-capture"
+  mkdir -p "$dest"
+  ln -s "$staged/auspex" "$staged/auspex-capture"
+  rc=0
+  env -i PATH="$PATH" BINARYURI="$staged/auspex" VERSION="v0.13.0" VERIFY="checksum" HOOKSCOPE="user" \
+    AUSPEX_BIN_DEST="$dest/auspex" AUSPEX_SHARE_DIR="$WORK/share" \
+    bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] || ! cmp -s "$WEBROOT/auspex" "$dest/auspex" || [ -e "$dest/auspex-capture" ]; then
+    echo "FAIL [$label]: expected auspex alone, with the staged link not copied (rc=$rc)" >&2
     sed 's/^/    /' "$WORK/out.log" >&2
     fail=$((fail + 1))
     return

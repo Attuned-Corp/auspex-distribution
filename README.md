@@ -28,12 +28,12 @@ pluggable `binaryUri`); your install instructions provide the exact `--base-url`
 ```bash
 # macOS / Linux
 curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.sh \
-  | bash -s -- --version v0.1.0 --base-url <your-auspex-distribution-host>
+  | bash -s -- --version v0.13.0 --base-url <your-auspex-distribution-host>
 ```
 
 ```powershell
 # Windows
-& ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -Version v0.1.0 -BaseUrl <your-auspex-distribution-host>
+& ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -Version v0.13.0 -BaseUrl <your-auspex-distribution-host>
 ```
 
 Flags: `--version <tag>` (optional — when omitted, and no `--url`/`--digest`, the installer resolves the
@@ -256,6 +256,9 @@ DIGEST=$(jq -r --arg os "$OS" --arg arch "$ARCH" \
 curl -fsSLO "https://$HOST/blobs/sha256/${DIGEST#sha256:}"
 # then confirm sha256(the downloaded blob) == ${DIGEST#sha256:}
 ```
+
+For `auspex-capture` (0.13.0 and later), select `application/x-executable` on Linux or
+`application/x-mach-binary` on macOS instead of `application/octet-stream`, which names `auspex` alone.
 
 ### Pinning by digest
 

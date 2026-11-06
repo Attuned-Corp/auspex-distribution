@@ -315,9 +315,8 @@ _require_trusted_root() {
   fi
 }
 
-# The manifest media type of a raw binary, by its file name and os (auspex ADR 0068): `auspex` is the sole
-# application/octet-stream per os/arch, and the capture-only `auspex-capture` is indexed under the platform's
-# executable type so that selector stays unique. Any other name keeps the octet-stream lookup.
+# auspex-capture is indexed under its platform's executable type, so octet-stream stays the one auspex per
+# os/arch (auspex ADR 0068); any other name keeps the octet-stream lookup.
 raw_binary_media_type() { # <file-name> <os>
   case "$1:$2" in
     auspex-capture:darwin) printf 'application/x-mach-binary' ;;
@@ -422,11 +421,8 @@ _verify_release_manifest() { # <ver_root> <version>
 # in every release from this version on (its pre-releases included) and in none before it.
 AUSPEX_CAPTURE_SINCE="0.13.0"
 
-# Decide whether to install auspex-capture beside the auspex at <auspex_version_url>. Sets CAPTURE_URL to the
-# capture binary's URL in the same release directory, or leaves it empty, with a note, when the release
-# predates it or the URL isn't a .../releases/<v>/<os>/<arch>/auspex path. From AUSPEX_CAPTURE_SINCE on the
-# caller must acquire it like auspex (fail-closed): a missing one there is a broken or tampered release.
-# Without it, `auspex install` links auspex-capture to auspex, so hooks still capture, more slowly.
+# Sets CAPTURE_URL to auspex-capture beside <auspex_version_url>, which the caller must acquire fail-closed;
+# empty, with a note, for a release before AUSPEX_CAPTURE_SINCE or a URL without that layout.
 CAPTURE_URL=""
 resolve_capture_url() { # <auspex_version_url>
   local url="$1" re='/releases/v?([0-9]+)\.([0-9]+)\.([0-9]+)[^/]*/[^/]+/[^/]+/auspex$' since s_major s_minor s_patch
