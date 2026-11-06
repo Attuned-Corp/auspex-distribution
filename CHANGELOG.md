@@ -41,9 +41,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and the Feature now also download, verify (same mode as `auspex`, fail-closed) and place `auspex-capture`
   beside `auspex`: the small capture-only program coding tools run on every event, which starts in about
   half the time. From auspex 0.13.0 on it is required, and a missing or unverifiable one fails the install
-  with neither binary placed. A release before 0.13.0 installs `auspex` alone, as before. A digest pin
-  installs `auspex` only. The Claude and Cursor cloud recipes get it through the installer, and the
-  examples now pin auspex v0.13.0.
+  with neither binary placed. A release before 0.13.0 installs `auspex` alone, as before. The Claude and
+  Cursor cloud recipes get it through the installer, and the examples now pin auspex v0.13.0.
+- **Shared** · **Pin the capture binary by digest** — a digest pin names one file, so `--capture-digest`
+  (macOS / Linux installer), `-CaptureDigest` (Windows installer, for `auspexw.exe`) and the Feature's
+  `captureDigest` pin the hook binary beside it, self-verified the same way and before either binary is
+  placed. Without it, a digest pin installs `auspex` alone, as before.
 
 ## [2026-10-30]
 

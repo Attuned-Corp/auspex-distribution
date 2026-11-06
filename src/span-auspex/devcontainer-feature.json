@@ -20,6 +20,11 @@
       "default": "",
       "description": "Pin the exact artifact by content: a raw sha256 (optionally 'sha256:'-prefixed) of the binary. When set, the install fetches it straight from the version-free content-addressed blob store (<host>/blobs/sha256/<digest>, host taken from binaryUri) and self-verifies sha256(bytes)==digest — bypassing version→manifest resolution, so it survives a re-tag and needs no cosign/jq. The 'version' and 'verify' options are not consulted for a pinned digest (the digest is the trust anchor); obtain the digest out-of-band from a once-verified manifest or your org's pin. For an in-container path binaryUri, the local file is self-verified against the pin before it is copied."
     },
+    "captureDigest": {
+      "type": "string",
+      "default": "",
+      "description": "With 'digest': pin auspex-capture (auspex 0.13.0 and later), the small binary coding-tool hooks run, by its own sha256, fetched and self-verified the same way. Without it, a 'digest' pin installs auspex alone and auspex install links auspex-capture to it, so hooks run the slower full binary. For an in-container path binaryUri, the auspex-capture beside that path must match it. Requires 'digest'."
+    },
     "verify": {
       "type": "string",
       "enum": ["checksum", "cosign", "none"],

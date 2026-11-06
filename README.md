@@ -66,15 +66,16 @@ On macOS and Linux, from auspex 0.13.0 on, the installer also places **`auspex-c
 verified the same way: the small capture-only program coding tools run on every event, which starts in about
 half the time of `auspex`. `auspex install` picks it up from there. It is required from 0.13.0 on: if it is
 missing or doesn't verify, the install fails and places neither binary. A release before 0.13.0 installs
-`auspex` alone. A `--digest` pin installs `auspex` only: put `auspex-capture` beside it (it has its own
-digest in the signed manifest), or `auspex install` links it to `auspex` and hooks capture more slowly.
+`auspex` alone. A `--digest` pin names one file, so pin `auspex-capture` with `--capture-digest` beside it
+(see [Pinning by digest](#pinning-by-digest)); otherwise `auspex install` links it to `auspex` and hooks
+capture more slowly.
 
 On Windows the installer also places **`auspexw.exe`** beside `auspex.exe`, verified the same way: the
 windowless build of auspex that coding tools run on every event (the `python.exe` / `pythonw.exe` pairing —
 it opens no console window, so each hook is about a third faster). `auspex install` picks it up from there. It
 is required from auspex 0.10.0 on: if it is missing or doesn't verify, the install fails, as it would for
-`auspex.exe`. A release before 0.10.0 installs without it. A `-Digest` pin installs `auspex.exe` only: for
-0.10.0 and later, put `auspexw.exe` beside it (it has its own digest in the signed manifest) before running
+`auspex.exe`. A release before 0.10.0 installs without it. A `-Digest` pin names one file: for 0.10.0 and
+later, pin `auspexw.exe` too with `-CaptureDigest`, or put it beside `auspex.exe` yourself before running
 `auspex install`, which needs both.
 
 ### Verifying the installer before you run it
@@ -178,6 +179,7 @@ below). A copy-paste starting point lives in [`examples/devcontainer.json`](./ex
 | `binaryUri` | `""` (required) | Where to get the binary. An `http(s)://` URL is downloaded (and verified — see `verify`); any other value is a path already present in the container and is copied. `{{version}}` in the URL is replaced with `version`. Your download host serves the raw binary at `https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe]`. |
 | `version` | `""` | Release tag substituted into the `binaryUri` template (e.g. `v0.1.0`) and recorded alongside the binary. Empty is fine for a non-templated `binaryUri`; a `{{version}}` template with no `version` **fails the install** (the Feature needs a concrete tag — cosign verification is tag-bound) **unless** `digest` pins the bytes instead. |
 | `digest` | `""` | **Pin the exact artifact by content** — a raw sha256 (optionally `sha256:`-prefixed) of the binary. When set, the install fetches it straight from the version-free content-addressed blob store (`<host>/blobs/sha256/<digest>`, host taken from `binaryUri`) and self-verifies `sha256(bytes)==digest`, **bypassing** version→manifest resolution — so it **survives a re-tag** and needs no cosign/jq. `version` and `verify` are **not consulted** for a pinned digest (the digest is the trust anchor). For an in-container path `binaryUri`, the local file is self-verified against the pin before it's copied. See [Pinning by digest](#pinning-by-digest). |
+| `captureDigest` | `""` | With `digest`: pin `auspex-capture` (auspex 0.13.0 and later) by its own sha256, fetched and self-verified the same way. For an in-container path `binaryUri`, the `auspex-capture` beside it must match. Without it, a `digest` pin installs `auspex` alone and hooks run the slower full binary. |
 | `verify` | `cosign` | Integrity/provenance check for a **downloaded** `binaryUri` (ignored when `digest` is set). `cosign` (default) resolves the cosign-signed version→digest manifest for the requested tag + os/arch, then installs the artifact **by digest** from the content-addressed blob store and self-verifies (`sha256(bytes)` == the signed digest) — **authenticity**, and it closes the version-substitution gap by binding the tag into the signed index. It needs **no** pre-installed cosign or jq (the Feature auto-provisions pinned ones) and makes **no** Sigstore network calls (a pinned `trusted_root.json` ships in the Feature); it does need egress to `github.com` (a ~150 MB cosign + a small jq, once per build). `checksum` fetches the adjacent `<binaryUri>.sha256` and fails on a SHA-256 mismatch or a missing sidecar (integrity only, no egress beyond the download host). `none` skips verification. Ignored for an in-container path `binaryUri`. See [Verifying the download](#verifying-the-download). |
 | `auspexHome` | `""` | `AUSPEX_HOME` for the binary, config, and runspace. Empty uses the daemon default (`~/.auspex`). A non-default value is **published container-wide** by the feature (see [Custom home](#custom-home)) so coding-tool hooks resolve the same home as the daemon — no manual `containerEnv` override needed. |
 | `tokenFile` | `""` | **Path** to a platform-mounted file holding the org token (not the token itself). The more secure enrollment path — see [Enrolling with Span](#enrolling-with-span). |
@@ -210,8 +212,9 @@ So a devcontainer pins a release with `version` + a templated `binaryUri` (see [
 URL for 0.13.0 or later, the Feature also fetches `auspex-capture` from the same directory, checks it with
 the same `verify` mode, and places it beside `auspex`. Coding-tool hooks run it on every event. A missing
 or unverified one fails the install. For an in-container path, an `auspex-capture` beside it is copied too.
-A `digest` pin installs `auspex` alone. Without `auspex-capture`, `auspex install` links it to `auspex`:
-hooks still capture, but each event starts the full binary.
+A `digest` pin installs `auspex` alone unless `captureDigest` pins `auspex-capture` too. Without
+`auspex-capture`, `auspex install` links it to `auspex`: hooks still capture, but each event starts the full
+binary.
 
 ### Verifying the download
 
@@ -278,10 +281,16 @@ Set `digest` (Feature) or `--digest` / `-Digest` (bootstrap) to a raw sha256 (op
 "features": {
   "ghcr.io/attuned-corp/auspex-distribution/span-auspex:0": {
     "binaryUri": "https://<your-auspex-download-host>/releases/v0.1.0/linux/amd64/auspex",
-    "digest": "sha256:<64-hex-of-the-linux-amd64-binary>"
+    "digest": "sha256:<64-hex-of-the-linux-amd64-binary>",
+    "captureDigest": "sha256:<64-hex-of-the-linux-amd64-auspex-capture>" // auspex 0.13.0 and later
   }
 }
 ```
+
+A digest names one file. From auspex 0.13.0, pin `auspex-capture` beside `auspex` with `captureDigest` (Feature)
+or `--capture-digest` (bootstrap), and on Windows pin `auspexw.exe` with `-CaptureDigest`. Take both digests
+from the same release's signed manifest; `auspex install` only uses a capture binary whose version matches
+`auspex`, and links to `auspex` otherwise.
 
 When a digest is pinned the install fetches `<host>/blobs/sha256/<digest>` and self-verifies
 `sha256(bytes) == digest` — the digest **is** the trust anchor, so no manifest, cosign, or jq is fetched or

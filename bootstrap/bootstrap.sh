@@ -40,6 +40,7 @@ VERIFY="${AUSPEX_VERIFY:-cosign}"
 BIN_DIR="${AUSPEX_BIN_DIR:-}"
 BINARY_URL="${AUSPEX_BINARY_URL:-}" # full override; bypasses BASE_URL/version/os/arch derivation
 DIGEST="${AUSPEX_DIGEST:-}"         # pin a raw sha256 (of the artifact) — installs the version-free blob directly
+CAPTURE_DIGEST="${AUSPEX_CAPTURE_DIGEST:-}" # with --digest: pin auspex-capture's sha256 too
 
 usage() {
   cat >&2 <<EOF
@@ -53,12 +54,14 @@ auspex-capture binary its hooks run, beside it.
   --url <url>         full binary URL (overrides --base-url/--version/os/arch derivation)
   --digest <sha256>   pin by content: install <base-url>/blobs/sha256/<digest> directly and self-verify
                       (version-free — survives a re-tag; needs --base-url, or --url to derive the host).
-                      Installs auspex only.
+                      Installs auspex only, unless --capture-digest is also given.
+  --capture-digest <sha256>
+                      with --digest: also install auspex-capture by its own sha256 (auspex 0.13.0 and later)
   --bin-dir <dir>     install dir (default: /usr/local/bin if writable, else \$HOME/.local/bin)
   -h, --help          this help
 
 Env equivalents: AUSPEX_VERSION, AUSPEX_VERIFY, AUSPEX_BASE_URL, AUSPEX_BINARY_URL, AUSPEX_DIGEST,
-AUSPEX_BIN_DIR, AUSPEX_COSIGN_BASE_URL (mirror the pinned cosign CLI for air-gapped installs).
+AUSPEX_CAPTURE_DIGEST, AUSPEX_BIN_DIR, AUSPEX_COSIGN_BASE_URL (mirror the pinned cosign CLI for air-gapped installs).
 EOF
 }
 
@@ -69,6 +72,7 @@ while [ "$#" -gt 0 ]; do
     --base-url) BASE_URL="${2:-}"; shift 2 ;;
     --url) BINARY_URL="${2:-}"; shift 2 ;;
     --digest) DIGEST="${2:-}"; shift 2 ;;
+    --capture-digest) CAPTURE_DIGEST="${2:-}"; shift 2 ;;
     --bin-dir) BIN_DIR="${2:-}"; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: unknown argument '$1'" >&2; usage; exit "$AUSPEX_VERIFY_EX_USAGE" ;;
@@ -79,6 +83,10 @@ case "$VERIFY" in
   cosign | checksum | none) ;;
   *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: --verify must be one of cosign|checksum|none (got '${VERIFY}')" >&2; exit "$AUSPEX_VERIFY_EX_USAGE" ;;
 esac
+if [ -n "$CAPTURE_DIGEST" ] && [ -z "$DIGEST" ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: --capture-digest pins auspex-capture beside a --digest pin of auspex — pass --digest too (a version install fetches auspex-capture itself)" >&2
+  exit "$AUSPEX_VERIFY_EX_USAGE"
+fi
 
 # --- OS/arch detection + URL derivation ------------------------------------------------------------------
 detect_os() {
@@ -181,9 +189,14 @@ else
 fi
 
 # auspex-capture, the capture-only binary hooks run (auspex 0.13.0 and later), is acquired the same way before
-# either binary is placed, so a failed verify leaves nothing installed. A digest pin names one artifact.
-if [ -n "$DIGEST" ]; then
-  echo "${AUSPEX_VERIFY_LOG_PREFIX}: note — a --digest pin installs auspex only; for 0.13.0 and later put auspex-capture beside it (its own digest is in the signed manifest), or \`auspex install\` links it to auspex (slower hooks)" >&2
+# either binary is placed, so a failed verify leaves nothing installed. A digest pin names one artifact, so
+# auspex-capture needs its own (--capture-digest).
+if [ -n "$CAPTURE_DIGEST" ]; then
+  cap_tmp="$(mktemp)"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinning auspex-capture by digest (host ${PIN_BASE})"
+  acquire_by_digest "$PIN_BASE" "$CAPTURE_DIGEST" "$cap_tmp"
+elif [ -n "$DIGEST" ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: note — a --digest pin installs auspex only; for 0.13.0 and later pass --capture-digest with auspex-capture's sha256 (from the signed manifest), or \`auspex install\` links it to auspex (slower hooks)" >&2
 else
   resolve_capture_url "$BINARY_URL" # sets CAPTURE_URL, or leaves it empty with a note
   if [ -n "$CAPTURE_URL" ]; then
