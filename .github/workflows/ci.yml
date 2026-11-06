@@ -83,7 +83,11 @@ jobs:
     # The read-only cross-repo App credential lives in a DEDICATED, UNPROTECTED environment (no required
     # reviewers / no branch policy) so this per-PR guard runs unattended — NOT the `release` deployment
     # environment (whose required reviewers would pause every run). Env `ssot-reconcile` holds the two
-    # secrets AUSPEX_SSOT_APP_ID + AUSPEX_SSOT_APP_PRIVATE_KEY.
+    # secrets AUSPEX_SSOT_APP_CLIENT_ID + AUSPEX_SSOT_APP_PRIVATE_KEY.
+    #
+    # Dependabot-triggered runs see ONLY Dependabot secrets (environment secrets resolve empty), so the
+    # same two secrets are ALSO stored as repo Dependabot secrets. Rotate the App key in BOTH stores, or
+    # every Dependabot PR fails here — and this job is the one that exercises create-github-app-token bumps.
     environment: ssot-reconcile
     permissions:
       contents: read
@@ -94,9 +98,9 @@ jobs:
       # Attuned-Corp/auspex with Contents: Read). No PAT, no write scope.
       - name: Mint read-only auspex token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.AUSPEX_SSOT_APP_ID }}
+          client-id: ${{ secrets.AUSPEX_SSOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AUSPEX_SSOT_APP_PRIVATE_KEY }}
           owner: Attuned-Corp
           repositories: auspex
