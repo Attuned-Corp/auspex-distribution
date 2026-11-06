@@ -35,6 +35,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-11-06]
+
+Published components:
+
+- **span-auspex Feature** — `0.6.0` (GHCR OCI tag/digest)
+- **Install surface** — `installers-v0.1.4` (GitHub Release; from auspex 0.13.0 the macOS / Linux installer
+  also places `auspex-capture`, and each installer's digest pin gains a pin for the capture binary)
+
 ### Added
 
 - **Shared** · **`auspex-capture` beside `auspex` (auspex 0.13.0 and later)** — the macOS / Linux installer
