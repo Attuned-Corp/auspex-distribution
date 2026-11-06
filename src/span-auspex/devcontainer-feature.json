@@ -1,6 +1,6 @@
 {
   "id": "span-auspex",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "name": "Span Auspex Capture",
   "documentationURL": "https://github.com/Attuned-Corp/auspex-distribution",
   "description": "Installs the auspex capture agent and runs it under the auspex-owned supervisor (no OS service manager), the posture for ephemeral dev containers and cloud agents. onCreate does a service-free, idempotent cold install (wires detected coding tools + arms the cold-start capture relax); postStart (re)launches `auspex daemon --supervise` so the worker is respawned and drained on the orchestrator's resume/stop.",
@@ -8,7 +8,7 @@
     "binaryUri": {
       "type": "string",
       "default": "",
-      "description": "Where to obtain the auspex binary. An http(s):// URL is downloaded; any other value is treated as a path already present in the container and copied. Empty fails the install with guidance — distribution is intentionally pluggable and has no default source yet."
+      "description": "Where to obtain the auspex binary. An http(s):// URL is downloaded; any other value is treated as a path already present in the container and copied. Empty fails the install with guidance — distribution is intentionally pluggable and has no default source yet. For auspex 0.13.0 and later, the auspex-capture binary in the same release directory (or beside the path) is placed too, verified the same way."
     },
     "version": {
       "type": "string",
@@ -19,6 +19,11 @@
       "type": "string",
       "default": "",
       "description": "Pin the exact artifact by content: a raw sha256 (optionally 'sha256:'-prefixed) of the binary. When set, the install fetches it straight from the version-free content-addressed blob store (<host>/blobs/sha256/<digest>, host taken from binaryUri) and self-verifies sha256(bytes)==digest — bypassing version→manifest resolution, so it survives a re-tag and needs no cosign/jq. The 'version' and 'verify' options are not consulted for a pinned digest (the digest is the trust anchor); obtain the digest out-of-band from a once-verified manifest or your org's pin. For an in-container path binaryUri, the local file is self-verified against the pin before it is copied."
+    },
+    "captureDigest": {
+      "type": "string",
+      "default": "",
+      "description": "With 'digest': pin auspex-capture (auspex 0.13.0 and later), the small binary coding-tool hooks run, by its own sha256, fetched and self-verified the same way. Without it, a 'digest' pin installs auspex alone and auspex install links auspex-capture to it, so hooks run the slower full binary. For an in-container path binaryUri, the auspex-capture beside that path must match it. Requires 'digest'."
     },
     "verify": {
       "type": "string",

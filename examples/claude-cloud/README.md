@@ -158,6 +158,8 @@ placement tier (no double-capture).
   `releases/latest/download`, independent of the `AUSPEX_VERSION` binary tag it passes through as `--version`),
   which fetches the pinned binary from `AUSPEX_BASE_URL` and **cosign-verifies it against an offline embedded
   trust root before execution** — a tampered/unsigned/wrong-version artifact fails closed (no capture wired).
+  From auspex 0.13.0 on it also places `auspex-capture`, the small program hooks run, beside `auspex`. A
+  pinned `AUSPEX_VERSION` below 0.13.0 installs `auspex` alone, and hooks run the slower full binary.
 - **Single managed hook tier (no double-capture).** `install.sh` runs `auspex hooks install --system`, wiring
   the **managed** tier — auspex's own-file at `/etc/claude-code/managed-settings.d/auspex.json`, out-of-tree
   (no commit-leak) and the only tier that fires under Claude's `allowManagedHooksOnly` lockdown. It elevates

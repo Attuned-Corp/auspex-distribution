@@ -10,6 +10,7 @@ BINARY_URI="${BINARYURI:-}"
 VERSION="${VERSION:-}"
 VERIFY="${VERIFY:-cosign}"
 DIGEST="${DIGEST:-}" # optional pin: a raw sha256 (of the artifact) that bypasses version→manifest resolution
+CAPTURE_DIGEST="${CAPTUREDIGEST:-}" # with digest: auspex-capture's own sha256 pin
 FEATURE_HOME="${AUSPEXHOME:-}"
 DEVICE_ID="${DEVICEID:-}"
 TOKEN_FILE="${TOKENFILE:-}"
@@ -20,6 +21,9 @@ HOOK_SCOPE="${HOOKSCOPE:-user}"
 # install lands at the canonical /usr/local paths.
 SHARE_DIR="${AUSPEX_SHARE_DIR:-/usr/local/share/auspex}"
 BIN_DEST="${AUSPEX_BIN_DEST:-/usr/local/bin/auspex}"
+# auspex-capture, the capture-only binary hooks run (auspex 0.13.0 and later), goes beside auspex: `auspex
+# install` looks for it there, and links it to auspex when it is missing (hooks still capture, more slowly).
+CAPTURE_DEST="$(dirname "$BIN_DEST")/auspex-capture"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Verification recipe + pinned trust material (identity regex, OIDC issuer, cosign pins, trusted_root.json,
@@ -64,6 +68,22 @@ case "$VERIFY" in
     exit 1
     ;;
 esac
+if [ -n "$CAPTURE_DIGEST" ] && [ -z "$DIGEST" ]; then
+  echo "auspex feature: option 'captureDigest' pins auspex-capture beside a 'digest' pin of auspex — set 'digest' too (a version install fetches auspex-capture itself)" >&2
+  exit 1
+fi
+
+# Fail unless the local <file> hashes to the pinned digest (optionally 'sha256:'-prefixed, any case).
+require_local_pin() { # <file> <digest>
+  local pin="${2#sha256:}" got
+  pin="$(printf '%s' "$pin" | tr 'A-F' 'a-f')"
+  got="$(sha256_of "$1")"
+  if [ "$pin" != "$got" ]; then
+    echo "auspex feature: pinned digest mismatch for ${1} (expected sha256:${pin}, got sha256:${got}) — refusing to install" >&2
+    exit 1
+  fi
+  echo "auspex feature: ${1} matches pinned digest sha256:${got}"
+}
 
 case "$BINARY_URI" in
   http://* | https://*)
@@ -91,7 +111,28 @@ case "$BINARY_URI" in
       echo "auspex feature: acquiring binary (verify: ${VERIFY}) for ${BINARY_URI}"
       acquire_verified "$BINARY_URI" "$VERIFY" "$dl_tmp"
     fi
+    # auspex-capture is acquired the same way before either binary is placed, so a failed verify leaves
+    # nothing installed. A digest pin names one artifact, so auspex-capture needs its own (captureDigest).
+    cap_tmp=""
+    if [ -n "$CAPTURE_DIGEST" ]; then
+      cap_tmp="$(mktemp)"
+      acquire_by_digest "$BINARY_URI" "$CAPTURE_DIGEST" "$cap_tmp"
+    elif [ -n "$DIGEST" ]; then
+      echo "auspex feature: note — a 'digest' pin installs auspex only; set 'captureDigest' to pin auspex-capture too, or auspex install links it to auspex (slower hooks)" >&2
+    else
+      resolve_capture_url "$BINARY_URI" # sets CAPTURE_URL, or leaves it empty with a note
+      if [ -n "$CAPTURE_URL" ]; then
+        cap_tmp="$(mktemp)"
+        echo "auspex feature: acquiring binary (verify: ${VERIFY}) for ${CAPTURE_URL}"
+        acquire_verified "$CAPTURE_URL" "$VERIFY" "$cap_tmp"
+      fi
+    fi
     mv "$dl_tmp" "$BIN_DEST"
+    # mv renames over a placeholder link a previous install may have left, rather than writing through it.
+    if [ -n "$cap_tmp" ]; then
+      chmod 0755 "$cap_tmp"
+      mv -f "$cap_tmp" "$CAPTURE_DEST"
+    fi
     ;;
   *)
     # A plain in-container path is a locally-present artifact — no network fetch, so the verify option does
@@ -102,17 +143,29 @@ case "$BINARY_URI" in
       echo "auspex feature: binaryUri path '${BINARY_URI}' does not exist in the container" >&2
       exit 1
     fi
-    if [ -n "$DIGEST" ]; then
-      _pin="${DIGEST#sha256:}"
-      _pin="$(printf '%s' "$_pin" | tr 'A-F' 'a-f')"
-      _got="$(sha256_of "$BINARY_URI")"
-      if [ "$_pin" != "$_got" ]; then
-        echo "auspex feature: pinned digest mismatch for ${BINARY_URI} (expected sha256:${_pin}, got sha256:${_got}) — refusing to install" >&2
+    [ -z "$DIGEST" ] || require_local_pin "$BINARY_URI" "$DIGEST"
+    # A staged auspex-capture is copied unless it is a placeholder link, or a digest pins auspex without a
+    # captureDigest for it. Both pins are checked before either binary is placed.
+    capture_src="$(dirname "$BINARY_URI")/auspex-capture"
+    copy_capture=0
+    if [ -n "$CAPTURE_DIGEST" ]; then
+      if [ ! -f "$capture_src" ] || [ -L "$capture_src" ]; then
+        echo "auspex feature: 'captureDigest' is set but there is no auspex-capture file beside ${BINARY_URI} — refusing to install" >&2
         exit 1
       fi
-      echo "auspex feature: local binary matches pinned digest sha256:${_got}"
+      require_local_pin "$capture_src" "$CAPTURE_DIGEST"
+      copy_capture=1
+    elif [ -f "$capture_src" ] && [ ! -L "$capture_src" ] && [ -z "$DIGEST" ]; then
+      copy_capture=1
     fi
     cp "$BINARY_URI" "$BIN_DEST"
+    # The destination is removed first so cp can't write through a placeholder link into auspex.
+    if [ "$copy_capture" -eq 1 ]; then
+      rm -f "$CAPTURE_DEST"
+      cp "$capture_src" "$CAPTURE_DEST"
+      chmod 0755 "$CAPTURE_DEST"
+      echo "auspex feature: copied ${capture_src}"
+    fi
     ;;
 esac
 chmod 0755 "$BIN_DEST"
