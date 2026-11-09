@@ -11,6 +11,7 @@ VERSION="${VERSION:-}"
 VERIFY="${VERIFY:-cosign}"
 DIGEST="${DIGEST:-}" # optional pin: a raw sha256 (of the artifact) that bypasses version→manifest resolution
 CAPTURE_DIGEST="${CAPTUREDIGEST:-}" # with digest: auspex-capture's own sha256 pin
+MANIFEST_DIGEST="${MANIFESTDIGEST:-}" # pin a whole release by its manifest's sha256
 FEATURE_HOME="${AUSPEXHOME:-}"
 DEVICE_ID="${DEVICEID:-}"
 TOKEN_FILE="${TOKENFILE:-}"
@@ -53,8 +54,8 @@ case "$BINARY_URI" in
   *'{{version}}'*)
     # A pinned digest addresses the version-free blob, so an empty version is fine then (the blob path is
     # derived from the host root, before /releases/); otherwise a {{version}} template needs a concrete tag.
-    if [ -z "$VERSION" ] && [ -z "$DIGEST" ]; then
-      echo "auspex feature: binaryUri uses the {{version}} token but no 'version' (or 'digest') was set — set 'version' to a release tag (e.g. v0.1.0), or set 'digest' to pin by content. A concrete tag is required here (cosign verification is tag-bound)." >&2
+    if [ -z "$VERSION" ] && [ -z "$DIGEST" ] && [ -z "$MANIFEST_DIGEST" ]; then
+      echo "auspex feature: binaryUri uses the {{version}} token but no 'version' (or 'manifestDigest' or 'digest') was set — set 'version' to a release tag (e.g. v0.1.0), or pin by content. A concrete tag is required here (cosign verification is tag-bound)." >&2
       exit 1
     fi
     ;;
@@ -68,6 +69,10 @@ case "$VERIFY" in
     exit 1
     ;;
 esac
+if [ -n "$MANIFEST_DIGEST" ] && { [ -n "$DIGEST" ] || [ -n "$CAPTURE_DIGEST" ]; }; then
+  echo "auspex feature: option 'manifestDigest' pins every binary already — unset 'digest'/'captureDigest'" >&2
+  exit 1
+fi
 if [ -n "$CAPTURE_DIGEST" ] && [ -z "$DIGEST" ]; then
   echo "auspex feature: option 'captureDigest' pins auspex-capture beside a 'digest' pin of auspex — set 'digest' too (a version install fetches auspex-capture itself)" >&2
   exit 1
@@ -97,6 +102,23 @@ case "$BINARY_URI" in
         }
         ;;
     esac
+    # A manifest pin takes the host and os/arch from binaryUri, resolves the release's version URL, then
+    # installs through the cosign path below, which reads the pinned manifest instead of a signature.
+    if [ -n "$MANIFEST_DIGEST" ]; then
+      platform_re='/releases/[^/]*/([^/]+)/([^/]+)/auspex$'
+      if ! [[ "$BINARY_URI" =~ $platform_re ]]; then
+        echo "auspex feature: 'manifestDigest' needs a binaryUri of the form <host>/releases/<version>/<os>/<arch>/auspex, for the host and platform (got ${BINARY_URI})" >&2
+        exit 1
+      fi
+      acquire_by_manifest_digest "$BINARY_URI" "$MANIFEST_DIGEST" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+      if [ -n "$VERSION" ] && [ "$VERSION" != "$MANIFEST_VERSION" ]; then
+        echo "auspex feature: 'version' is ${VERSION} but the pinned manifest is ${MANIFEST_VERSION} — refusing" >&2
+        exit 1
+      fi
+      BINARY_URI="$MANIFEST_BINARY_URL"
+      VERSION="$MANIFEST_VERSION"
+      VERIFY=cosign
+    fi
     # Both write the TRUSTED bytes to the temp and only return on success, so a tampered/truncated artifact
     # is never chmod +x'd into place; only a passing check promotes it to BIN_DEST.
     dl_tmp="$(mktemp)"
@@ -138,6 +160,10 @@ case "$BINARY_URI" in
     # A plain in-container path is a locally-present artifact — no network fetch, so the verify option does
     # not apply. When a 'digest' is pinned we still self-verify the local bytes against it (cheap assurance a
     # pre-staged binary matches the pin); otherwise it is treated as already-trusted and copied.
+    if [ -n "$MANIFEST_DIGEST" ]; then
+      echo "auspex feature: 'manifestDigest' needs an http(s) binaryUri; for an in-container path, pin each binary with 'digest' and 'captureDigest'" >&2
+      exit 1
+    fi
     echo "auspex feature: copying binary from path ${BINARY_URI}"
     if [ ! -f "$BINARY_URI" ]; then
       echo "auspex feature: binaryUri path '${BINARY_URI}' does not exist in the container" >&2

@@ -1,8 +1,6 @@
 #!/usr/bin/env pwsh
-# PowerShell installer contract: the shipped scripts are ASCII and parse, bootstrap.ps1's release-version
-# gate decides auspexw.exe as intended, and a cosign install places both binaries.
-# The gate checks load only the functions under test from the script's AST. The install check runs the whole
-# script against a local fixture tree, so nothing is downloaded.
+# PowerShell installer contract: the shipped scripts are ASCII and parse, the auspexw.exe version gate holds, and
+# -ManifestDigest installs or refuses as it should, run against a local fixture tree so nothing is downloaded.
 # Run: make ps1-test (needs pwsh; preinstalled on the GitHub-hosted ubuntu image).
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot '../bootstrap/bootstrap.ps1'
@@ -65,16 +63,17 @@ foreach ($c in @(
   Check "ships auspexw $($c[0])" (Test-ShipsAuspexw (Url $c[0])) $c[1]
 }
 
-# ---- a cosign install, end to end ----------------------------------------------------------------------
-# Runs the real bootstrap.ps1 in a child process of this same PowerShell, with two functions swapped out: Fetch
-# serves https://cdn.test/ from a fixture tree, and Ensure-Cosign installs a stub that passes.
+# ---- -ManifestDigest, end to end ----------------------------------------------------------------------
+# Runs the real bootstrap.ps1 in a child of this same shell with only Fetch (serves https://cdn.test/ from a
+# fixture tree) and Ensure-Cosign (a recording stub that passes) swapped, so the flag checks and order are real.
 foreach ($n in 'AUSPEX_VERSION', 'AUSPEX_VERIFY', 'AUSPEX_BASE_URL', 'AUSPEX_BINARY_URL', 'AUSPEX_DIGEST',
-  'AUSPEX_BIN_DIR', 'AUSPEX_COSIGN_BASE_URL') {
+  'AUSPEX_CAPTURE_DIGEST', 'AUSPEX_MANIFEST_DIGEST', 'AUSPEX_BIN_DIR', 'AUSPEX_COSIGN_BASE_URL') {
   Remove-Item "Env:$n" -ErrorAction SilentlyContinue
 }
 $env:PROCESSOR_ARCHITECTURE = 'AMD64'
 $work = Join-Path ([IO.Path]::GetTempPath()) ('auspex-ps1-test-' + [guid]::NewGuid().ToString())
 $cdn = Join-Path $work 'cdn'
+$cosignLog = Join-Path $work 'cosign.log'
 New-Item -ItemType Directory -Force -Path $cdn | Out-Null
 
 $swaps = @{
@@ -88,7 +87,7 @@ function Fetch([string]`$u, [string]`$out) {
 "@
   'Ensure-Cosign' = @"
 function Ensure-Cosign { `$script:CosignBin = 'Invoke-StubCosign' }
-function Invoke-StubCosign { `$global:LASTEXITCODE = 0 }
+function Invoke-StubCosign { Add-Content -LiteralPath '$cosignLog' -Value (`$args -join ' '); `$global:LASTEXITCODE = 0 }
 "@
 }
 $text = [IO.File]::ReadAllText($script)
@@ -102,6 +101,7 @@ $text = $text.Replace('@@AUSPEX_TRUSTED_ROOT_B64@@', [Convert]::ToBase64String([
 $text = $text -replace '@@AUSPEX_[A-Z0-9_]+@@', 'test'
 $installer = Join-Path $work 'install.ps1'
 [IO.File]::WriteAllText($installer, $text, [Text.Encoding]::ASCII)
+$shell = (Get-Process -Id $PID).Path
 
 function Write-Ascii([string]$path, [string]$content) {
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
@@ -114,39 +114,90 @@ Write-Ascii $exeFile ('fake-auspex-exe-' + [guid]::NewGuid().ToString())
 Write-Ascii $wFile ('fake-auspexw-exe-' + [guid]::NewGuid().ToString())
 $exeSum = Get-Sha $exeFile
 $wSum = Get-Sha $wFile
-$blobs = Join-Path $cdn 'blobs/sha256'
-New-Item -ItemType Directory -Force -Path $blobs | Out-Null
-Copy-Item -LiteralPath $exeFile -Destination (Join-Path $blobs $exeSum)
-Copy-Item -LiteralPath $wFile -Destination (Join-Path $blobs $wSum)
-$platform = @{ os = 'windows'; architecture = 'amd64' }
-Write-Ascii (Join-Path $cdn 'releases/v0.10.0/manifest.json') (@{
-    schemaVersion = 2
-    mediaType     = 'application/vnd.oci.image.index.v1+json'
-    manifests     = @(
-      @{ mediaType = 'application/octet-stream'; digest = "sha256:$exeSum"; platform = $platform },
-      @{ mediaType = 'application/vnd.microsoft.portable-executable'; digest = "sha256:$wSum"; platform = $platform })
-    annotations   = @{ 'org.opencontainers.image.version' = 'v0.10.0' }
-  } | ConvertTo-Json -Depth 6)
-Write-Ascii (Join-Path $cdn 'releases/v0.10.0/manifest.json.cosign.bundle') 'dummy-bundle'
 
-# The bin dir is never on PATH here, so the run also prints the PATH note.
-$bin = Join-Path $work 'bin'
-$ErrorActionPreference = 'Continue' # the child's stderr must not stop this script
-$out = & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -File $installer -BaseUrl 'https://cdn.test' -Version v0.10.0 -BinDir $bin 2>&1 | Out-String
-$rc = $LASTEXITCODE
-$ErrorActionPreference = 'Stop'
-$exe = Join-Path $bin 'auspex.exe'
-$w = Join-Path $bin 'auspexw.exe'
-if ($rc -ne 0) { $problem = "expected success, rc=$rc" }
-elseif (-not (Test-Path -LiteralPath $exe) -or (Get-Sha $exe) -ne $exeSum) { $problem = 'auspex.exe is missing or not the served bytes' }
-elseif (-not (Test-Path -LiteralPath $w) -or (Get-Sha $w) -ne $wSum) { $problem = 'auspexw.exe is missing or not the served bytes' }
-else { $problem = '' }
-if ($problem) {
-  Write-Host "FAIL  a cosign install places auspex.exe and auspexw.exe - $problem"
-  Write-Host ($out -replace '(?m)^', '        ')
-  $failures++
+# New-Release writes release $v's manifest layout and blobs and returns the manifest's digest. $variant breaks it:
+# no-auspex/no-auspexw, no-version/not-a-tag, or auspexw-tampered/blob-tampered (wrong bytes served).
+function New-Release([string]$v, [string]$variant = '') {
+  $blobs = Join-Path $cdn 'blobs/sha256'
+  New-Item -ItemType Directory -Force -Path $blobs | Out-Null
+  Copy-Item -LiteralPath $exeFile -Destination (Join-Path $blobs $exeSum) -Force
+  if ($variant -eq 'auspexw-tampered') { Write-Ascii (Join-Path $blobs $wSum) 'tampered-auspexw' }
+  else { Copy-Item -LiteralPath $wFile -Destination (Join-Path $blobs $wSum) -Force }
+  $descs = @()
+  if ($variant -ne 'no-auspex') {
+    $descs += @{ mediaType = 'application/octet-stream'; digest = "sha256:$exeSum"; platform = @{ os = 'windows'; architecture = 'amd64' } }
+  }
+  if ($variant -ne 'no-auspexw') {
+    $descs += @{ mediaType = 'application/vnd.microsoft.portable-executable'; digest = "sha256:$wSum"; platform = @{ os = 'windows'; architecture = 'amd64' } }
+  }
+  $ann = @{ 'org.opencontainers.image.version' = $v }
+  if ($variant -eq 'no-version') { $ann = @{} }
+  if ($variant -eq 'not-a-tag') { $ann = @{ 'org.opencontainers.image.version' = 'latest' } }
+  $manifest = Join-Path $cdn "releases/$v/manifest.json"
+  Write-Ascii $manifest (@{ schemaVersion = 2; mediaType = 'application/vnd.oci.image.index.v1+json'; manifests = $descs; annotations = $ann } | ConvertTo-Json -Depth 6)
+  Write-Ascii (Join-Path $cdn "releases/$v/manifest.json.cosign.bundle") 'dummy-bundle'
+  $sum = Get-Sha $manifest
+  if ($variant -eq 'blob-tampered') { Write-Ascii (Join-Path $blobs $sum) 'tampered-manifest' }
+  else { Copy-Item -LiteralPath $manifest -Destination (Join-Path $blobs $sum) -Force }
+  return $sum
 }
-else { Write-Host 'ok    a cosign install places auspex.exe and auspexw.exe' }
+
+function Get-Flat([string]$s) { ($s -replace '\r?\n\s*\|', '') -replace '\s', '' }
+
+# Test-Install runs the installer with $argv and checks what it placed: both, exe (auspex.exe alone) or none
+# (a refusal that placed nothing). -Pin also requires that cosign never ran. Returns the installer's output.
+function Test-Install([string]$what, [string[]]$argv, [string]$want, [string]$expect = '', [switch]$Pin) {
+  $bin = Join-Path $work 'bin'
+  Remove-Item -LiteralPath $bin, $cosignLog -Recurse -Force -ErrorAction SilentlyContinue
+  $ErrorActionPreference = 'Continue' # the child's stderr must not stop this script
+  $out = & $shell -NoProfile -ExecutionPolicy Bypass -File $installer @argv -BinDir $bin 2>&1 | Out-String
+  $rc = $LASTEXITCODE
+  $exe = Join-Path $bin 'auspex.exe'
+  $w = Join-Path $bin 'auspexw.exe'
+  $problem = ''
+  if ($want -eq 'none') {
+    if ($rc -eq 0) { $problem = 'expected a refusal' }
+    elseif ((Test-Path -LiteralPath $exe) -or (Test-Path -LiteralPath $w)) { $problem = 'a refused install placed a binary' }
+  }
+  elseif ($rc -ne 0) { $problem = "expected success, rc=$rc" }
+  elseif (-not (Test-Path -LiteralPath $exe) -or (Get-Sha $exe) -ne $exeSum) { $problem = 'auspex.exe is missing or not the served bytes' }
+  elseif ($want -eq 'both' -and (-not (Test-Path -LiteralPath $w) -or (Get-Sha $w) -ne $wSum)) { $problem = 'auspexw.exe is missing or not the served bytes' }
+  elseif ($want -eq 'exe' -and (Test-Path -LiteralPath $w)) { $problem = 'auspexw.exe placed for a release that predates it' }
+  # Errors wrap to the console width (pwsh 7 behind '| ' gutters, 5.1 mid-word), so match with no whitespace.
+  if (-not $problem -and $expect -and -not (Get-Flat $out).Contains((Get-Flat $expect))) { $problem = "the output lacks '$expect'" }
+  if (-not $problem -and $Pin -and (Test-Path -LiteralPath $cosignLog)) { $problem = 'a manifest pin called cosign' }
+  if ($problem) {
+    Write-Host "FAIL  $what - $problem"
+    Write-Host ($out -replace '(?m)^', '        ')
+    $script:failures++
+  }
+  else { Write-Host "ok    $what" }
+  return $out
+}
+
+$base = 'https://cdn.test'
+$m = New-Release 'v0.13.0'
+$out = Test-Install 'a cosign install prints the manifest pin' @('-BaseUrl', $base, '-Version', 'v0.13.0') 'both' "manifest digest sha256:$m"
+$printed = [regex]::Match((Get-Flat $out), 'manifestdigestsha256:([0-9a-f]{64})').Groups[1].Value
+$null = Test-Install 'the printed pin installs the same bytes, with no cosign' @('-BaseUrl', $base, '-ManifestDigest', $printed) 'both' -Pin
+$null = Test-Install 'a sha256:-prefixed uppercase pin' @('-BaseUrl', $base, '-ManifestDigest', "sha256:$($m.ToUpper())") 'both' -Pin
+$null = Test-Install 'the host derived from -Url' @('-Url', "$base/releases/v0.13.0/windows/amd64/auspex.exe", '-ManifestDigest', $m) 'both' -Pin
+$null = Test-Install 'a matching -Version' @('-BaseUrl', $base, '-ManifestDigest', $m, '-Version', 'v0.13.0') 'both' -Pin
+$null = Test-Install 'a mismatched -Version is refused' @('-BaseUrl', $base, '-ManifestDigest', $m, '-Version', 'v0.12.9') 'none' 'but the pinned manifest is v0.13.0'
+$null = Test-Install '-Digest beside it is refused' @('-BaseUrl', $base, '-ManifestDigest', $m, '-Digest', $exeSum) 'none' 'drop -Digest/-CaptureDigest'
+$null = Test-Install '-CaptureDigest beside it is refused' @('-BaseUrl', $base, '-ManifestDigest', $m, '-CaptureDigest', $wSum) 'none' 'drop -Digest/-CaptureDigest'
+$m = New-Release 'v0.9.1' 'no-auspexw'
+$null = Test-Install 'a release before auspexw.exe installs auspex.exe alone' @('-BaseUrl', $base, '-ManifestDigest', $m) 'exe' -Pin
+foreach ($c in @(
+    @('no-auspexw', 'no unique raw-binary (application/vnd.microsoft.portable-executable)'),
+    @('auspexw-tampered', 'self-verify FAILED'),
+    @('no-auspex', 'no unique raw-binary (application/octet-stream)'),
+    @('no-version', 'not a release tag'),
+    @('not-a-tag', 'not a release tag'),
+    @('blob-tampered', 'self-verify FAILED'))) {
+  $m = New-Release 'v0.13.0' $c[0]
+  $null = Test-Install "refused, nothing placed: $($c[0])" @('-BaseUrl', $base, '-ManifestDigest', $m) 'none' $c[1]
+}
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($failures) { Write-Host "$failures failure(s)"; exit 1 }
