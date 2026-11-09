@@ -8,5 +8,5 @@
 # descriptor legitimately changes.
 #
 # The guard reads the first non-comment, non-blank line below.
-# Pinned to Attuned-Corp/auspex#515 (release channel document identity, ADR 0066), merged to main.
-69a4e37c4408d1de3157e375e86fd00f064f7b77
+# Pinned to Attuned-Corp/auspex#545 (in-binary verification and its embedded trusted_root.json, ADR 0069), merged to main.
+3dc0f863c88e018c55e9c07b98cdaf123cf09c96
