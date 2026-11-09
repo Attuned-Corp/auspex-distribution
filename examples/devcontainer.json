@@ -13,7 +13,7 @@
       // to "cosign" — keyless-verifies the signed checksums.txt (auto-provisions cosign; no Sigstore
       // network; needs github.com egress).
       "binaryUri": "https://<your-auspex-download-host>/releases/{{version}}/linux/amd64/auspex",
-      "version": "v0.1.0",
+      "version": "v0.13.0", // 0.13.0 or later also installs auspex-capture, the faster binary hooks run
       // "verify": "checksum",  // lighter: SHA-256 sidecar only — integrity, no egress beyond the download host
       "hookScope": "user"
     }

@@ -27,6 +27,7 @@ param(
   [string]$BaseUrl = $env:AUSPEX_BASE_URL,   # REQUIRED unless -Url: no baked default (host-agnostic public repo)
   [string]$Url = $env:AUSPEX_BINARY_URL,
   [string]$Digest = $env:AUSPEX_DIGEST,      # pin a raw sha256 (of the artifact) - installs the version-free blob directly
+  [string]$CaptureDigest = $env:AUSPEX_CAPTURE_DIGEST, # with -Digest: pin auspexw.exe's sha256 too
   [string]$BinDir = $env:AUSPEX_BIN_DIR,
   [string]$CosignBaseUrl = $(if ($env:AUSPEX_COSIGN_BASE_URL) { $env:AUSPEX_COSIGN_BASE_URL } else { 'https://github.com/sigstore/cosign/releases/download' })
 )
@@ -208,6 +209,9 @@ function Acquire-ByDigest([string]$base, [string]$digest, [string]$out) {
 }
 
 # --- derive source ---------------------------------------------------------------------------------------
+if ($CaptureDigest -and -not $Digest) {
+  Fail "-CaptureDigest pins auspexw.exe beside a -Digest pin of auspex.exe - pass -Digest too (a version install fetches auspexw.exe itself)" 2
+}
 $pinBase = $null
 if ($Digest) {
   # Pin-by-digest needs only a host root (the blob is version/os/arch-free). Prefer -BaseUrl; else derive it
@@ -276,11 +280,21 @@ Write-Host "auspex install: installed $binDest"
 # console window, which makes every hook about a third faster (the python.exe / pythonw.exe pairing). A release
 # from $AuspexwSince on ships it, so it is fetched and verified exactly like auspex.exe, fail-closed. A release
 # before that installs auspex.exe alone, and its hooks run auspex.exe, as before. A digest pin names one
-# artifact, so it installs auspex.exe only: from $AuspexwSince on, `auspex install` then needs auspexw.exe put
-# beside it.
+# artifact, so auspexw.exe needs its own (-CaptureDigest); without it, from $AuspexwSince on, `auspex install`
+# needs auspexw.exe put beside auspex.exe.
 $wDest = Join-Path $BinDir 'auspexw.exe'
-if ($Digest) {
-  Write-Host "auspex install: -Digest pins auspex.exe only - from auspex 0.10.0 on, put auspexw.exe beside it before running auspex install"
+if ($CaptureDigest) {
+  $wTmp = New-TemporaryFile
+  try {
+    Acquire-ByDigest $pinBase $CaptureDigest $wTmp.FullName
+    Move-Item -LiteralPath $wTmp.FullName -Destination $wDest -Force
+    Write-Host "auspex install: installed $wDest"
+  } finally {
+    if (Test-Path -LiteralPath $wTmp.FullName) { Remove-Item -LiteralPath $wTmp.FullName -Force }
+  }
+}
+elseif ($Digest) {
+  Write-Host "auspex install: -Digest pins auspex.exe only - from auspex 0.10.0 on, pass -CaptureDigest with auspexw.exe's sha256, or put auspexw.exe beside it before running auspex install"
 }
 elseif ($Url -match '/auspex\.exe$' -and (Test-ShipsAuspexw $Url)) {
   $wUrl = $Url -replace '/auspex\.exe$', '/auspexw.exe'

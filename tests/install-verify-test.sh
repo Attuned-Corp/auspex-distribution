@@ -44,6 +44,9 @@ trap cleanup EXIT
 # only downloads → verifies → chmod → records; so its content just has to be stable and non-empty.
 printf 'fake-auspex-binary-%s' "$(date +%s)" >"$WEBROOT/auspex"
 GOOD_SUM="$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$WEBROOT/auspex"; else shasum -a 256 "$WEBROOT/auspex"; fi | awk '{print $1}')"
+# Distinct bytes from the auspex fixture, so a mix-up between the two is caught.
+printf 'fake-auspex-capture-binary-%s' "$(date +%s)" >"$WEBROOT/auspex-capture"
+CAP_SUM="$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$WEBROOT/auspex-capture"; else shasum -a 256 "$WEBROOT/auspex-capture"; fi | awk '{print $1}')"
 
 # Serve $WEBROOT on an ephemeral port; report it via PORT_FILE. Quiet handler so the log doesn't drown
 # the test output.
@@ -144,9 +147,12 @@ check "verify-none-skips"       ok   none     none
 # DOWNLOADED cosign fails closed. The real cryptographic verify is covered by the Docker smoke / rc tag.
 STUB_DIR="$WORK/stubbin"
 mkdir -p "$STUB_DIR"
+COSIGN_CALLS="$STUB_DIR/cosign.calls" # one line per stub invocation, reset by each make_stub_cosign
 make_stub_cosign() { # <verify-blob exit code>
+  : >"$COSIGN_CALLS"
   {
     echo '#!/usr/bin/env bash'
+    echo "echo \"\$*\" >>'$COSIGN_CALLS'"
     echo "exit $1"
   } >"$STUB_DIR/cosign"
   chmod 0755 "$STUB_DIR/cosign"
@@ -442,6 +448,8 @@ boot_latest_check() { # <label> <expect ok|fail> <script> <marker contents|absen
   [ "$marker" = absent ] || printf '%s\n' "$marker" >"$WEBROOT/releases/latest/VERSION"
   cp "$WEBROOT/auspex" "$reldir/auspex"
   printf '%s  auspex\n' "$GOOD_SUM" >"$reldir/auspex.sha256"
+  cp "$WEBROOT/auspex-capture" "$reldir/auspex-capture" # the tag is past 0.13.0, so it ships one
+  printf '%s  auspex-capture\n' "$CAP_SUM" >"$reldir/auspex-capture.sha256"
   env -i PATH="$PATH" \
     bash "$script" --base-url "$BASE" --verify checksum --bin-dir "$bootdir" >"$WORK/out.log" 2>&1 || rc=$?
   local got="ok"
@@ -452,8 +460,9 @@ boot_latest_check() { # <label> <expect ok|fail> <script> <marker contents|absen
     fail=$((fail + 1))
     return
   fi
-  if [ "$expect" = "ok" ] && { [ ! -x "$bootdir/auspex" ] || ! cmp -s "$WEBROOT/auspex" "$bootdir/auspex"; }; then
-    echo "FAIL [$label]: reported success but ${bootdir}/auspex is missing/wrong" >&2
+  if [ "$expect" = "ok" ] && { [ ! -x "$bootdir/auspex" ] || ! cmp -s "$WEBROOT/auspex" "$bootdir/auspex" \
+    || ! cmp -s "$WEBROOT/auspex-capture" "$bootdir/auspex-capture"; }; then
+    echo "FAIL [$label]: reported success but ${bootdir}/auspex or auspex-capture is missing/wrong" >&2
     fail=$((fail + 1))
     return
   fi
@@ -476,6 +485,242 @@ if [ -n "$LATEST_ARCH" ]; then
 else
   echo "skip [boot latest matrix]: unsupported host CPU '$(uname -m)'"
 fi
+
+# ---- auspex-capture beside auspex (auspex 0.13.0 and later) -------------------------------------------
+# From 0.13.0 a missing or tampered auspex-capture fails closed with nothing placed; older releases install
+# auspex alone. Placing it replaces a placeholder link, never writing through it into auspex.
+CAP_RELDIR_OS_ARCH="linux/amd64"
+setup_capture_release() { # <version> <capture: good|bad|absent>
+  local ver="$1" capture="$2" dir="$WEBROOT/releases/$1/${CAP_RELDIR_OS_ARCH}" cap_desc=""
+  rm -rf "$WEBROOT/releases/$ver"
+  mkdir -p "$dir" "$WEBROOT/blobs/sha256"
+  cp "$WEBROOT/auspex" "$dir/auspex"
+  printf '%s  auspex\n' "$GOOD_SUM" >"$dir/auspex.sha256"
+  cp "$WEBROOT/auspex" "$WEBROOT/blobs/sha256/${GOOD_SUM}"
+  rm -f "$WEBROOT/blobs/sha256/${CAP_SUM}"
+  case "$capture" in
+    good | bad)
+      cp "$WEBROOT/auspex-capture" "$dir/auspex-capture"
+      if [ "$capture" = good ]; then
+        printf '%s  auspex-capture\n' "$CAP_SUM" >"$dir/auspex-capture.sha256"
+        cp "$WEBROOT/auspex-capture" "$WEBROOT/blobs/sha256/${CAP_SUM}"
+      else
+        printf '%s  auspex-capture\n' "0000000000000000000000000000000000000000000000000000000000000000" >"$dir/auspex-capture.sha256"
+        printf 'tampered-capture-%s' "$(date +%s)" >"$WEBROOT/blobs/sha256/${CAP_SUM}"
+      fi
+      cap_desc=",
+    {
+      \"mediaType\": \"application/x-executable\",
+      \"digest\": \"sha256:${CAP_SUM}\",
+      \"platform\": { \"os\": \"linux\", \"architecture\": \"amd64\" }
+    }"
+      ;;
+    absent) : ;;
+  esac
+  cat >"$WEBROOT/releases/$ver/manifest.json" <<JSON
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/octet-stream",
+      "digest": "sha256:${GOOD_SUM}",
+      "platform": { "os": "linux", "architecture": "amd64" }
+    }${cap_desc}
+  ],
+  "annotations": { "org.opencontainers.image.version": "${ver}" }
+}
+JSON
+  printf 'dummy-new-format-bundle\n' >"$WEBROOT/releases/$ver/manifest.json.cosign.bundle"
+}
+
+# <label> <ok|fail> <feature|feature-digests|boot|boot-digest|boot-digests|boot-capdigest-only> <verify-mode> <version>
+#   <capture good|bad|absent> <both|auspex>
+# [placeholder] — "placeholder" pre-seeds an old auspex and an auspex-capture link to it. The *-digests runners
+# pin both binaries by digest.
+capture_check() {
+  local label="$1" expect="$2" runner="$3" mode="$4" ver="$5" capture="$6" placed="$7" seed="${8:-}"
+  local dest="$WORK/capdest" url rc=0 extra_path=""
+  setup_capture_release "$ver" "$capture"
+  url="${BASE}/releases/${ver}/${CAP_RELDIR_OS_ARCH}/auspex"
+  [ "$mode" = cosign ] && { make_stub_cosign 0; extra_path="$STUB_DIR"; }
+  rm -rf "$dest" "$WORK/share"
+  mkdir -p "$dest"
+  if [ "$seed" = placeholder ]; then
+    printf 'old-auspex' >"$dest/auspex"
+    ln -s "$dest/auspex" "$dest/auspex-capture"
+  fi
+  case "$runner" in
+    feature)
+      env -i PATH="${extra_path:+$extra_path:}$PATH" BINARYURI="$url" VERSION="$ver" VERIFY="$mode" HOOKSCOPE="user" \
+        AUSPEX_BIN_DEST="$dest/auspex" AUSPEX_SHARE_DIR="$WORK/share" \
+        bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+      ;;
+    boot)
+      env -i PATH="${extra_path:+$extra_path:}$PATH" \
+        bash "$ASSEMBLED_SH" --url "$url" --verify "$mode" --bin-dir "$dest" >"$WORK/out.log" 2>&1 || rc=$?
+      ;;
+    feature-digests)
+      env -i PATH="$PATH" BINARYURI="$url" VERSION="$ver" DIGEST="$GOOD_SUM" CAPTUREDIGEST="sha256:$CAP_SUM" HOOKSCOPE="user" \
+        AUSPEX_BIN_DEST="$dest/auspex" AUSPEX_SHARE_DIR="$WORK/share" \
+        bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+      ;;
+    boot-digest)
+      env -i PATH="$PATH" \
+        bash "$ASSEMBLED_SH" --url "$url" --digest "$GOOD_SUM" --bin-dir "$dest" >"$WORK/out.log" 2>&1 || rc=$?
+      ;;
+    boot-digests)
+      env -i PATH="$PATH" \
+        bash "$ASSEMBLED_SH" --base-url "$BASE" --digest "$GOOD_SUM" --capture-digest "$CAP_SUM" --bin-dir "$dest" >"$WORK/out.log" 2>&1 || rc=$?
+      ;;
+    boot-capdigest-only)
+      env -i PATH="$PATH" \
+        bash "$ASSEMBLED_SH" --url "$url" --capture-digest "$CAP_SUM" --bin-dir "$dest" >"$WORK/out.log" 2>&1 || rc=$?
+      ;;
+  esac
+  local got="ok" problem=""
+  [ "$rc" -ne 0 ] && got="fail"
+  if [ "$got" != "$expect" ]; then
+    problem="expected $expect but ${got}ed (rc=$rc)"
+  elif [ "$expect" = ok ]; then
+    cmp -s "$WEBROOT/auspex" "$dest/auspex" || problem="auspex is missing or not the served bytes"
+    if [ "$placed" = both ]; then
+      if [ -L "$dest/auspex-capture" ] || [ ! -x "$dest/auspex-capture" ] || ! cmp -s "$WEBROOT/auspex-capture" "$dest/auspex-capture"; then
+        problem="auspex-capture is missing, still a link, or not the served bytes"
+      fi
+    elif [ -e "$dest/auspex-capture" ] && [ ! -L "$dest/auspex-capture" ]; then
+      problem="auspex-capture was placed for a release that predates it"
+    fi
+  else
+    local want_auspex="" ; [ "$seed" = placeholder ] && want_auspex="old-auspex"
+    if [ "$(cat "$dest/auspex" 2>/dev/null)" != "$want_auspex" ]; then
+      problem="refused install changed ${dest}/auspex (must fail closed)"
+    elif [ -e "$dest/auspex-capture" ] && [ ! -L "$dest/auspex-capture" ]; then
+      problem="refused install placed auspex-capture (must fail closed)"
+    fi
+  fi
+  if [ -n "$problem" ]; then
+    echo "FAIL [$label]: $problem" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: ${runner} ${got} as expected"
+  pass=$((pass + 1))
+}
+
+echo "==> auspex-capture beside auspex (0.13.0 and later)"
+capture_check "cap-feature-checksum"        ok   feature     checksum v0.13.0     good   both
+capture_check "cap-feature-prerelease"      ok   feature     checksum v0.13.0-rc1 good   both   # an rc counts as its base version
+capture_check "cap-feature-major"           ok   feature     checksum v1.0.0      good   both
+capture_check "cap-feature-older-release"   ok   feature     checksum v0.12.9     absent auspex # predates it → auspex alone
+capture_check "cap-feature-missing"         fail feature     checksum v0.13.0     absent both   # required from 0.13.0
+capture_check "cap-feature-mismatch"        fail feature     checksum v0.13.0     bad    both   placeholder
+capture_check "cap-feature-placeholder"     ok   feature     checksum v0.13.0     good   both   placeholder
+capture_check "cap-boot-checksum"           ok   boot        checksum v0.13.0     good   both   placeholder
+capture_check "cap-boot-older-release"      ok   boot        checksum v0.12.9     absent auspex
+capture_check "cap-boot-missing"            fail boot        checksum v0.13.0     absent both
+capture_check "cap-boot-digest-pin"         ok   boot-digest none     v0.13.0     good   auspex # a pin names auspex alone
+capture_check "cap-boot-digests"            ok   boot-digests none    v0.13.0     good   both   placeholder # one pin per binary
+capture_check "cap-boot-digests-tampered"   fail boot-digests none    v0.13.0     bad    both   placeholder # capture blob fails its pin
+capture_check "cap-boot-capdigest-alone"    fail boot-capdigest-only none v0.13.0 good   both   # needs --digest too
+capture_check "cap-feature-digests"         ok   feature-digests none v0.13.0     good   both   placeholder
+capture_check "cap-feature-digests-tampered" fail feature-digests none v0.13.0    bad    both
+if command -v jq >/dev/null 2>&1; then
+  capture_check "cap-feature-cosign"        ok   feature     cosign   v0.13.0     good   both
+  capture_check "cap-boot-cosign"           ok   boot        cosign   v0.13.0     good   both   placeholder
+  # Both binaries resolve from the one signed manifest, verified once: a second verify would also re-download
+  # the pinned cosign wherever none is on PATH.
+  if [ "$(grep -c '^verify-blob' "$COSIGN_CALLS")" -eq 1 ]; then
+    echo "ok [cap-boot-cosign-verifies-once]: one manifest verify for both binaries"
+    pass=$((pass + 1))
+  else
+    echo "FAIL [cap-boot-cosign-verifies-once]: expected 1 cosign verify-blob call, got $(grep -c '^verify-blob' "$COSIGN_CALLS")" >&2
+    fail=$((fail + 1))
+  fi
+  capture_check "cap-boot-cosign-tampered"  fail boot        cosign   v0.13.0     bad    both
+  capture_check "cap-boot-cosign-no-desc"   fail boot        cosign   v0.13.0     absent both   # no x-executable descriptor
+else
+  echo "skip [capture cosign matrix]: jq not available to parse the fixture manifest"
+fi
+
+# A local binaryUri path copies a pre-staged auspex-capture beside it, replacing a placeholder link.
+cap_path_check() {
+  local label="cap-feature-local-path" staged="$WORK/staged" dest="$WORK/capdest" rc=0
+  rm -rf "$staged" "$dest" "$WORK/share"
+  mkdir -p "$staged" "$dest"
+  cp "$WEBROOT/auspex" "$WEBROOT/auspex-capture" "$staged/"
+  printf 'old-auspex' >"$dest/auspex"
+  ln -s "$dest/auspex" "$dest/auspex-capture"
+  env -i PATH="$PATH" BINARYURI="$staged/auspex" VERSION="v0.13.0" VERIFY="checksum" HOOKSCOPE="user" \
+    AUSPEX_BIN_DEST="$dest/auspex" AUSPEX_SHARE_DIR="$WORK/share" \
+    bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] || ! cmp -s "$WEBROOT/auspex" "$dest/auspex" || [ -L "$dest/auspex-capture" ] \
+    || ! cmp -s "$WEBROOT/auspex-capture" "$dest/auspex-capture"; then
+    echo "FAIL [$label]: expected both binaries copied, with the placeholder link replaced (rc=$rc)" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: feature ok as expected"
+  pass=$((pass + 1))
+
+  # A staged placeholder link (a directory where `auspex install` already ran) is not copied as a binary.
+  label="cap-feature-local-path-link"
+  rm -rf "$dest" "$WORK/share" "$staged/auspex-capture"
+  mkdir -p "$dest"
+  ln -s "$staged/auspex" "$staged/auspex-capture"
+  rc=0
+  env -i PATH="$PATH" BINARYURI="$staged/auspex" VERSION="v0.13.0" VERIFY="checksum" HOOKSCOPE="user" \
+    AUSPEX_BIN_DEST="$dest/auspex" AUSPEX_SHARE_DIR="$WORK/share" \
+    bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] || ! cmp -s "$WEBROOT/auspex" "$dest/auspex" || [ -e "$dest/auspex-capture" ]; then
+    echo "FAIL [$label]: expected auspex alone, with the staged link not copied (rc=$rc)" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: feature ok as expected"
+  pass=$((pass + 1))
+}
+cap_path_check
+
+# A local path with digest + captureDigest copies both only when each matches its pin, and places nothing
+# otherwise. <label> <ok|fail> <staged capture: good|bad|absent>
+cap_path_digests_check() {
+  local label="$1" expect="$2" staged_cap="$3" staged="$WORK/staged" dest="$WORK/capdest" rc=0
+  rm -rf "$staged" "$dest" "$WORK/share"
+  mkdir -p "$staged" "$dest"
+  cp "$WEBROOT/auspex" "$staged/"
+  case "$staged_cap" in
+    good) cp "$WEBROOT/auspex-capture" "$staged/" ;;
+    bad) printf 'not-the-pinned-capture' >"$staged/auspex-capture" ;;
+    absent) : ;;
+  esac
+  env -i PATH="$PATH" BINARYURI="$staged/auspex" DIGEST="$GOOD_SUM" CAPTUREDIGEST="$CAP_SUM" HOOKSCOPE="user" \
+    AUSPEX_BIN_DEST="$dest/auspex" AUSPEX_SHARE_DIR="$WORK/share" \
+    bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+  local got="ok" problem=""
+  [ "$rc" -ne 0 ] && got="fail"
+  if [ "$got" != "$expect" ]; then
+    problem="expected $expect but ${got}ed (rc=$rc)"
+  elif [ "$expect" = ok ] && { ! cmp -s "$WEBROOT/auspex" "$dest/auspex" || ! cmp -s "$WEBROOT/auspex-capture" "$dest/auspex-capture"; }; then
+    problem="both binaries should be copied"
+  elif [ "$expect" = fail ] && { [ -e "$dest/auspex" ] || [ -e "$dest/auspex-capture" ]; }; then
+    problem="a refused install placed a binary (must fail closed)"
+  fi
+  if [ -n "$problem" ]; then
+    echo "FAIL [$label]: $problem" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: feature ${got} as expected"
+  pass=$((pass + 1))
+}
+cap_path_digests_check "cap-feature-local-digests"          ok   good
+cap_path_digests_check "cap-feature-local-digests-mismatch" fail bad
+cap_path_digests_check "cap-feature-local-digests-missing"  fail absent
 
 # ---- MDM verify-before-install gate (AC7) ------------------------------------------------------------
 # The gate reuses the SAME recipe via verify_cosign_bundle (bundle-direct over the .pkg/.msi bytes — no
