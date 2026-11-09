@@ -35,6 +35,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Installers** · **Windows installer places auspexw.exe and finishes cleanly** — a default (cosign)
+  install now places `auspexw.exe` beside `auspex.exe` for auspex 0.10.0 and later. Before, it placed
+  `auspex.exe` alone, and `auspex install` then failed because it copies `auspexw.exe` from beside
+  `auspex.exe`. The installer also no longer fails at the end, after placing the binaries, when its
+  install folder isn't on `PATH` yet, as on a first install; it prints the `setx PATH` hint instead.
+
 ## [2026-11-06]
 
 Published components:
