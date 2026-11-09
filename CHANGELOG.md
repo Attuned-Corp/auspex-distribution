@@ -35,6 +35,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Shared** · **Pin a whole release with one digest** — `--manifest-digest` (macOS / Linux installer),
+  `-ManifestDigest` (Windows installer) and the Feature's `manifestDigest` take the sha256 of a release's
+  `manifest.json`. The install fetches that manifest by digest from your download host, checks it against
+  the pin, and installs every binary it lists for the platform: `auspex`, plus `auspex-capture` on macOS
+  and Linux or `auspexw.exe` on Windows. One pin covers every binary on every platform, needs no cosign, and
+  places nothing unless every binary checks out. It works for auspex releases published since the download
+  host stores each manifest by digest; for earlier releases, keep the per-binary `--digest` pins.
+- **Shared** · **A cosign install prints the manifest pin** — after the signature check, a default install
+  prints `manifest digest sha256:… pins every binary of <tag>`, ready to use as the pin.
+
 ### Fixed
 
 - **Installers** · **Windows installer places auspexw.exe and finishes cleanly** — a default (cosign)

@@ -40,7 +40,8 @@ Flags: `--version <tag>` (optional — when omitted, and no `--url`/`--digest`, 
 download host's `latest` pointer to a concrete tag, then verifies against it; pass `--version` to pin),
 `--base-url <url>` / `AUSPEX_BASE_URL` (**required** unless `--url` — your auspex distribution host,
 from your install instructions, or an internal mirror), `--verify cosign|checksum|none` (default `cosign`),
-`--digest <sha256>` (pin exact bytes — see [Pinning by digest](#pinning-by-digest)), `--bin-dir <dir>`, and
+`--manifest-digest <sha256>` (pin a whole release — see [Pinning by digest](#pinning-by-digest)),
+`--digest <sha256>` (pin one binary's bytes), `--bin-dir <dir>`, and
 `AUSPEX_COSIGN_BASE_URL` (mirror the pinned cosign CLI for air-gapped installs). Same verify tiers as the
 Feature.
 
@@ -48,35 +49,39 @@ The `latest` pointer (`releases/latest/VERSION`) is **unsigned**. It only choose
 the signature check then proves that release is genuine, not that it is the newest. The installer accepts
 only a full release tag from it (`vX.Y.Z` or `vX.Y.Z-<pre>`). Pass `--version` to choose the release yourself.
 
-To pin the **exact bytes** (version-free — survives a re-tag, needs no cosign/jq), pass `--digest` /
-`-Digest` with just the host:
+To pin the **exact bytes** of a release, pass its manifest digest, `--manifest-digest` /
+`-ManifestDigest`, with just the host. One pin covers every binary for every platform, and it needs no cosign.
+A cosign install prints the digest: `manifest digest sha256:<64-hex> pins every binary of <tag>`.
 
 ```bash
-# macOS / Linux — install the artifact addressed by its own sha256, straight from the blob store
+# macOS / Linux — install every binary of the release the pinned manifest names
 curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.sh \
-  | bash -s -- --base-url <your-auspex-distribution-host> --digest sha256:<64-hex>
+  | bash -s -- --base-url <your-auspex-distribution-host> --manifest-digest sha256:<64-hex>
 ```
 
 ```powershell
 # Windows
-& ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -BaseUrl <your-auspex-distribution-host> -Digest sha256:<64-hex>
+& ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -BaseUrl <your-auspex-distribution-host> -ManifestDigest sha256:<64-hex>
 ```
+
+`--digest` / `-Digest` pins one binary by its own sha256 instead; see [Pinning by digest](#pinning-by-digest)
+for when to use it.
 
 On macOS and Linux, from auspex 0.13.0 on, the installer also places **`auspex-capture`** beside `auspex`,
 verified the same way: the small capture-only program coding tools run on every event, which starts in about
 half the time of `auspex`. `auspex install` picks it up from there. It is required from 0.13.0 on: if it is
 missing or doesn't verify, the install fails and places neither binary. A release before 0.13.0 installs
-`auspex` alone. A `--digest` pin names one file, so pin `auspex-capture` with `--capture-digest` beside it
-(see [Pinning by digest](#pinning-by-digest)); otherwise `auspex install` links it to `auspex` and hooks
-capture more slowly.
+`auspex` alone. A `--manifest-digest` pin installs it too. A `--digest` pin names one file, so pin
+`auspex-capture` with `--capture-digest` beside it (see [Pinning by digest](#pinning-by-digest)); otherwise
+`auspex install` links it to `auspex` and hooks capture more slowly.
 
 On Windows the installer also places **`auspexw.exe`** beside `auspex.exe`, verified the same way: the
 windowless build of auspex that coding tools run on every event (the `python.exe` / `pythonw.exe` pairing —
 it opens no console window, so each hook is about a third faster). `auspex install` picks it up from there. It
 is required from auspex 0.10.0 on: if it is missing or doesn't verify, the install fails, as it would for
-`auspex.exe`. A release before 0.10.0 installs without it. A `-Digest` pin names one file: for 0.10.0 and
-later, pin `auspexw.exe` too with `-CaptureDigest`, or put it beside `auspex.exe` yourself before running
-`auspex install`, which needs both.
+`auspex.exe`. A release before 0.10.0 installs without it. A `-ManifestDigest` pin installs it too. A
+`-Digest` pin names one file: for 0.10.0 and later, pin `auspexw.exe` too with `-CaptureDigest`, or put it
+beside `auspex.exe` yourself before running `auspex install`, which needs both.
 
 ### Verifying the installer before you run it
 
@@ -177,7 +182,8 @@ below). A copy-paste starting point lives in [`examples/devcontainer.json`](./ex
 | Option | Default | Purpose |
 |--------|---------|---------|
 | `binaryUri` | `""` (required) | Where to get the binary. An `http(s)://` URL is downloaded (and verified — see `verify`); any other value is a path already present in the container and is copied. `{{version}}` in the URL is replaced with `version`. Your download host serves the raw binary at `https://<your-auspex-download-host>/releases/<version>/<os>/<arch>/auspex[.exe]`. |
-| `version` | `""` | Release tag substituted into the `binaryUri` template (e.g. `v0.1.0`) and recorded alongside the binary. Empty is fine for a non-templated `binaryUri`; a `{{version}}` template with no `version` **fails the install** (the Feature needs a concrete tag — cosign verification is tag-bound) **unless** `digest` pins the bytes instead. |
+| `version` | `""` | Release tag substituted into the `binaryUri` template (e.g. `v0.1.0`) and recorded alongside the binary. Empty is fine for a non-templated `binaryUri`; a `{{version}}` template with no `version` **fails the install** (the Feature needs a concrete tag — cosign verification is tag-bound) **unless** `manifestDigest` or `digest` pins the bytes instead. With `manifestDigest`, a non-empty `version` must match the pinned release. |
+| `manifestDigest` | `""` | **Pin a whole release by content** — the sha256 (optionally `sha256:`-prefixed) of its `manifest.json`. The install fetches the manifest from `<host>/blobs/sha256/<digest>` and self-verifies it, reads the release version from it, then installs `auspex` and, for 0.13.0 and later, `auspex-capture` by the digests it lists for the platform in `binaryUri`. Needs jq (auto-provisioned), not cosign. `binaryUri` must be an https `…/releases/<version>/<os>/<arch>/auspex` URL; `{{version}}` may stay empty. Can't be combined with `digest` / `captureDigest`. See [Pinning by digest](#pinning-by-digest). |
 | `digest` | `""` | **Pin the exact artifact by content** — a raw sha256 (optionally `sha256:`-prefixed) of the binary. When set, the install fetches it straight from the version-free content-addressed blob store (`<host>/blobs/sha256/<digest>`, host taken from `binaryUri`) and self-verifies `sha256(bytes)==digest`, **bypassing** version→manifest resolution — so it **survives a re-tag** and needs no cosign/jq. `version` and `verify` are **not consulted** for a pinned digest (the digest is the trust anchor). For an in-container path `binaryUri`, the local file is self-verified against the pin before it's copied. See [Pinning by digest](#pinning-by-digest). |
 | `captureDigest` | `""` | With `digest`: pin `auspex-capture` (auspex 0.13.0 and later) by its own sha256, fetched and self-verified the same way. For an in-container path `binaryUri`, the `auspex-capture` beside it must match. Without it, a `digest` pin installs `auspex` alone and hooks run the slower full binary. |
 | `verify` | `cosign` | Integrity/provenance check for a **downloaded** `binaryUri` (ignored when `digest` is set). `cosign` (default) resolves the cosign-signed version→digest manifest for the requested tag + os/arch, then installs the artifact **by digest** from the content-addressed blob store and self-verifies (`sha256(bytes)` == the signed digest) — **authenticity**, and it closes the version-substitution gap by binding the tag into the signed index. It needs **no** pre-installed cosign or jq (the Feature auto-provisions pinned ones) and makes **no** Sigstore network calls (a pinned `trusted_root.json` ships in the Feature); it does need egress to `github.com` (a ~150 MB cosign + a small jq, once per build). `checksum` fetches the adjacent `<binaryUri>.sha256` and fails on a SHA-256 mismatch or a missing sidecar (integrity only, no egress beyond the download host). `none` skips verification. Ignored for an in-container path `binaryUri`. See [Verifying the download](#verifying-the-download). |
@@ -212,7 +218,8 @@ So a devcontainer pins a release with `version` + a templated `binaryUri` (see [
 URL for 0.13.0 or later, the Feature also fetches `auspex-capture` from the same directory, checks it with
 the same `verify` mode, and places it beside `auspex`. Coding-tool hooks run it on every event. A missing
 or unverified one fails the install. For an in-container path, an `auspex-capture` beside it is copied too.
-A `digest` pin installs `auspex` alone unless `captureDigest` pins `auspex-capture` too. Without
+A `manifestDigest` pin installs both. A `digest` pin installs `auspex` alone unless `captureDigest` pins
+`auspex-capture` too. Without
 `auspex-capture`, `auspex install` links it to `auspex`: hooks still capture, but each event starts the full
 binary.
 
@@ -265,7 +272,7 @@ For `auspex-capture` (0.13.0 and later), select `application/x-executable` on Li
 
 ### Pinning by digest
 
-`verify: cosign` *derives* the artifact's digest from the signed manifest for a tag; **pinning by digest**
+`verify: cosign` *derives* each binary's digest from the signed manifest for a tag; **pinning by digest**
 skips that resolution and names the bytes directly. Because artifacts are **dual-stored** — at the human
 version path *and* at a global, content-addressed `blobs/sha256/<digest>` (auspex ADR 0047) — a digest is a
 **version-free** address: it resolves to the same bytes regardless of tag, and keeps resolving even if the
@@ -273,7 +280,46 @@ version is later re-tagged or de-indexed (only an explicit blob withdrawal remov
 the strongest supply-chain pin — the analogue of an `@sha256:…` image pin — for a lockfile, a golden
 `devcontainer.json`, or an org-wide fleet baseline.
 
-Set `digest` (Feature) or `--digest` / `-Digest` (bootstrap) to a raw sha256 (optionally `sha256:`-prefixed):
+**Pin the release manifest.** Each release's `manifest.json` is stored by its own digest too, and it lists
+every binary for every platform by digest. So one pin, `manifestDigest` (Feature) or `--manifest-digest` /
+`-ManifestDigest` (bootstrap), covers `auspex`, `auspex-capture` and `auspexw.exe` on every platform:
+
+```jsonc
+// Dev Container Feature — pin a whole release; binaryUri supplies the host and platform, and version may
+// stay empty (if set, it must match the pinned release).
+"features": {
+  "ghcr.io/attuned-corp/auspex-distribution/span-auspex:0": {
+    "binaryUri": "https://<your-auspex-download-host>/releases/{{version}}/linux/amd64/auspex",
+    "manifestDigest": "sha256:<64-hex-of-the-release-manifest>"
+  }
+}
+```
+
+The install fetches `<host>/blobs/sha256/<digest>`, self-verifies `sha256(bytes) == digest`, reads the release
+version from the manifest, and installs each binary for this platform by the digest the manifest lists. The
+digest **is** the trust anchor, so no cosign runs; the bash installer and the Feature read the manifest with
+jq (auto-provisioned and hash-pinned, like cosign), and PowerShell reads it natively. A byte mismatch, a
+missing blob, a manifest whose version isn't a release tag, or a missing binary the release should have
+**fails closed**, and nothing is placed.
+
+Get the digest from a source you trust:
+
+- **Install once with cosign.** A `verify: cosign` install prints it after the signature check:
+  `manifest digest sha256:<64-hex> pins every binary of <tag>`.
+- **By hand.** Run the [by-hand verification](#verifying-the-download) above, then hash the verified file:
+  `shasum -a 256 manifest.json` (or `sha256sum`). The cosign bundle signs this same digest.
+- Your organization's published pin.
+
+Only releases published since the manifest has been stored by digest have a manifest pin; for an earlier
+release, `<host>/blobs/sha256/<digest>` returns nothing, and the binary pins below still work.
+
+**Pin one binary.** `digest` (Feature) or `--digest` / `-Digest` (bootstrap) pins a single artifact by its
+own sha256 (optionally `sha256:`-prefixed). Use it where a manifest pin can't work:
+
+- a release published before manifests were stored by digest;
+- an in-container path `binaryUri` (the Feature self-verifies the local file against the pin);
+- an image that can't fetch jq — a binary pin needs no cosign or jq;
+- any other blob you want to pin.
 
 ```jsonc
 // Dev Container Feature — pin the exact bytes; binaryUri supplies only the host (the /releases/… tail and
@@ -290,15 +336,8 @@ Set `digest` (Feature) or `--digest` / `-Digest` (bootstrap) to a raw sha256 (op
 A digest names one file. From auspex 0.13.0, pin `auspex-capture` beside `auspex` with `captureDigest` (Feature)
 or `--capture-digest` (bootstrap), and on Windows pin `auspexw.exe` with `-CaptureDigest`. Take both digests
 from the same release's signed manifest; `auspex install` only uses a capture binary whose version matches
-`auspex`, and links to `auspex` otherwise.
-
-When a digest is pinned the install fetches `<host>/blobs/sha256/<digest>` and self-verifies
-`sha256(bytes) == digest` — the digest **is** the trust anchor, so no manifest, cosign, or jq is fetched or
-parsed (`version` / `verify` are not consulted). A byte mismatch, a missing blob, or a malformed digest
-**fails closed**. Obtain the digest out of band from a source you trust: the [by-hand two-hop
-verification](#verifying-the-download) above (which resolves + prints the per-os/arch digest from the
-cosign-verified manifest), or your organization's published pin. Note a digest is **per os/arch** — each
-platform's binary has its own sha256.
+`auspex`, and links to `auspex` otherwise. A binary digest is **per os/arch** — each platform's binary has its
+own sha256. A byte mismatch, a missing blob, or a malformed digest **fails closed**.
 
 ### Updating the pinned cosign / jq / trust root
 
