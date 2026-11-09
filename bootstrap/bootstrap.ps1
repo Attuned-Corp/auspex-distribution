@@ -265,7 +265,8 @@ try {
     switch ($Verify) {
       'none'     { Write-Warning "auspex install: -Verify none - installing WITHOUT verification (not recommended)"; Fetch $Url $dlTmp.FullName }
       'checksum' { Fetch $Url $dlTmp.FullName; Verify-Checksum $dlTmp.FullName $Url }
-      'cosign'   { $digest = Resolve-BinaryDigest $Url; Fetch-BlobByDigest $Url $digest $dlTmp.FullName }
+      # Not $digest: names are case-insensitive, so that would overwrite -Digest and skip auspexw.exe below.
+      'cosign'   { $exeDigest = Resolve-BinaryDigest $Url; Fetch-BlobByDigest $Url $exeDigest $dlTmp.FullName }
     }
   }
   Move-Item -LiteralPath $dlTmp.FullName -Destination $binDest -Force
@@ -315,5 +316,5 @@ else {
   Write-Host "auspex install: this release predates auspexw.exe - coding-tool hooks will run through auspex.exe"
 }
 if (($env:PATH -split ';') -notcontains $BinDir) {
-  Write-Host "auspex install: note - $BinDir is not on your PATH; add it (setx PATH \"$BinDir;%PATH%\") and reopen your shell"
+  Write-Host "auspex install: note - $BinDir is not on your PATH; add it (setx PATH `"$BinDir;%PATH%`") and reopen your shell"
 }
