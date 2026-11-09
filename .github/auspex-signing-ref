@@ -2,11 +2,12 @@
 # DESCRIPTOR from — tools/release/signing-identity.env (artifact and channel identity regexps + OIDC issuer)
 # and Makefile.setup.mk (COSIGN_VERSION) — to diff against this repo's verifier config (src/span-auspex/verify-lib.sh),
 # and internal/verify/trusted_root.json, which must match src/span-auspex/trusted_root.json byte for byte.
+# It also checks that package/macos/uninstall-managed.sh removes mdm/scheduled-update.sh's state directory.
 #
 # Set this to a full 40-char commit SHA for tamper-evidence (git content at a pinned SHA is
 # content-addressed, unlike a mutable branch). Bump it in a CODEOWNERS-gated PR when auspex's signing
 # descriptor legitimately changes.
 #
 # The guard reads the first non-comment, non-blank line below.
-# Pinned to Attuned-Corp/auspex#545 (in-binary verification and its embedded trusted_root.json, ADR 0069), merged to main.
-3dc0f863c88e018c55e9c07b98cdaf123cf09c96
+# Pinned to Attuned-Corp/auspex main after #551 (the managed uninstall removes the scheduled update's state).
+a7ec99efb410c51874f063e3981f2eae288f552e

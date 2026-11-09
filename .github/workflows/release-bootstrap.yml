@@ -74,11 +74,12 @@ jobs:
           chmod 0755 /usr/local/bin/cosign
           cosign version
 
-      - name: Sign installers + gate + cursor-cloud + claude-cloud recipes (cosign keyless) + checksums
+      - name: Sign installers + gate + scheduled update + cursor-cloud + claude-cloud recipes (cosign keyless) + checksums
         run: |
           set -euo pipefail
           cd dist
           assets=(auspex-install.sh auspex-install.ps1 auspex-verify-gate.sh auspex-verify-gate.ps1 \
+                  auspex-scheduled-update.sh \
                   cursor-cloud-install.sh cursor-cloud-start.sh cursor-cloud-preflight.sh \
                   claude-cloud-install.sh claude-cloud-session-start.sh claude-cloud-preflight.sh)
           for f in "${assets[@]}"; do
@@ -93,7 +94,7 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
-          flags=(--title "$TAG" --notes "Self-contained auspex install surface (curl|sh + PowerShell bootstrap, MDM verify-before-install gate) plus the signed Cursor cloud recipe scripts (cursor-cloud-install/start/preflight.sh) and Claude cloud recipe scripts (claude-cloud-install/session-start/preflight.sh), assembled from the shared verify recipe. See README → Installing outside a dev container, mdm/README.md, examples/cursor-cloud/README.md, and examples/claude-cloud/README.md.")
+          flags=(--title "$TAG" --notes "Self-contained auspex install surface (curl|sh + PowerShell bootstrap, MDM verify-before-install gate, MDM scheduled update) plus the signed Cursor cloud recipe scripts (cursor-cloud-install/start/preflight.sh) and Claude cloud recipe scripts (claude-cloud-install/session-start/preflight.sh), assembled from the shared verify recipe. See README → Installing outside a dev container, mdm/README.md, examples/cursor-cloud/README.md, and examples/claude-cloud/README.md.")
           [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
           gh release create "$TAG" "${flags[@]}" \
             dist/auspex-install.sh \
@@ -104,6 +105,8 @@ jobs:
             dist/auspex-verify-gate.sh.cosign.bundle \
             dist/auspex-verify-gate.ps1 \
             dist/auspex-verify-gate.ps1.cosign.bundle \
+            dist/auspex-scheduled-update.sh \
+            dist/auspex-scheduled-update.sh.cosign.bundle \
             dist/cursor-cloud-install.sh \
             dist/cursor-cloud-install.sh.cosign.bundle \
             dist/cursor-cloud-start.sh \
