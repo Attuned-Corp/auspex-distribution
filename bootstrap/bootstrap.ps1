@@ -28,6 +28,7 @@ param(
   [string]$Url = $env:AUSPEX_BINARY_URL,
   [string]$Digest = $env:AUSPEX_DIGEST,      # pin a raw sha256 (of the artifact) - installs the version-free blob directly
   [string]$CaptureDigest = $env:AUSPEX_CAPTURE_DIGEST, # with -Digest: pin auspexw.exe's sha256 too
+  [string]$ManifestDigest = $env:AUSPEX_MANIFEST_DIGEST, # pin a whole release by its manifest's sha256
   [string]$BinDir = $env:AUSPEX_BIN_DIR,
   [string]$CosignBaseUrl = $(if ($env:AUSPEX_COSIGN_BASE_URL) { $env:AUSPEX_COSIGN_BASE_URL } else { 'https://github.com/sigstore/cosign/releases/download' })
 )
@@ -98,6 +99,7 @@ function Verify-Checksum([string]$file, [string]$u) {
 }
 
 $script:CosignBin = $null
+$script:PinPrinted = $false # Resolve-BinaryDigest runs once per binary; the manifest pin prints once
 function Ensure-Cosign {
   $existing = Get-Command cosign -ErrorAction SilentlyContinue
   if ($existing) { $script:CosignBin = $existing.Source; return }
@@ -156,27 +158,42 @@ function Resolve-BinaryDigest([string]$u, [string]$MediaType = 'application/octe
     try {
       $json = Get-Content -Raw -LiteralPath $manifest.FullName | ConvertFrom-Json
       $mver = $json.annotations.'org.opencontainers.image.version'
-      $descs = @($json.manifests | Where-Object {
-          $_.mediaType -eq $MediaType -and $_.platform.os -eq $os -and $_.platform.architecture -eq $arch
-        })
     } catch {
       Fail "could not parse the signed manifest $verRoot/manifest.json - refusing to install" 14
     }
     if ($mver -ne $version) {
       Fail "the signed manifest is for '$mver' but the requested path is version '$version' - refusing (version substitution)" 14
     }
-    if ($descs.Count -ne 1) {
-      Fail "the signed manifest has no unique raw-binary ($MediaType) descriptor for $os/$arch - refusing to install" 14
+    if (-not $script:PinPrinted) {
+      Write-Host "auspex install: manifest digest sha256:$(Get-Sha256Hex $manifest.FullName) pins every binary of $version (signed manifest verified)"
+      $script:PinPrinted = $true
     }
-    $digest = $descs[0].digest
-    if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
-      Fail "the resolved digest '$digest' is not a bare sha256 hex - refusing to install" 14
-    }
-    Write-Host "auspex install: resolved $version $os/$arch -> $digest (signed manifest verified)"
-    return ($digest -replace '^sha256:', '')
+    $digest = Select-BinaryDigest $json $MediaType $os $arch 'signed manifest'
+    Write-Host "auspex install: resolved $version $os/$arch -> sha256:$digest (signed manifest verified)"
+    return $digest
   } finally {
     Remove-Item -LiteralPath $manifest.FullName, $bundle.FullName, $rootPath -Force -ErrorAction SilentlyContinue
   }
+}
+
+# Select-BinaryDigest returns the bare-hex digest of the one descriptor of $MediaType for $os/$arch in a parsed
+# manifest ($what names it in errors), failing closed when there isn't exactly one.
+function Select-BinaryDigest($json, [string]$MediaType, [string]$os, [string]$arch, [string]$what) {
+  try {
+    $descs = @($json.manifests | Where-Object {
+        $_.mediaType -eq $MediaType -and $_.platform.os -eq $os -and $_.platform.architecture -eq $arch
+      })
+  } catch {
+    Fail "could not read the descriptors of the $what - refusing to install" 14
+  }
+  if ($descs.Count -ne 1) {
+    Fail "the $what has no unique raw-binary ($MediaType) descriptor for $os/$arch - refusing to install" 14
+  }
+  $digest = "$($descs[0].digest)"
+  if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
+    Fail "the resolved digest '$digest' is not a bare sha256 hex - refusing to install" 14
+  }
+  return ($digest -replace '^sha256:', '')
 }
 
 # Fetch an artifact from the global content-addressed blob namespace and SELF-VERIFY (verify: cosign - auspex
@@ -200,25 +217,80 @@ function Fetch-BlobByDigest([string]$u, [string]$digest, [string]$out) {
 # trust anchor (obtained out-of-band), so no version/manifest/cosign is consulted - the self-verify is the
 # whole check and it survives a re-tag. <base> is the host root (blobs/sha256/<digest> is appended).
 function Acquire-ByDigest([string]$base, [string]$digest, [string]$out) {
-  $d = ($digest -replace '^sha256:', '').ToLower()
-  if ($d -notmatch '^[0-9a-f]{64}$') {
-    Fail "invalid pinned digest '$digest' - expected a 64-char sha256 hex (optionally 'sha256:'-prefixed)" 2
-  }
+  $d = Get-PinnedDigest $digest
   Write-Host "auspex install: pinning by digest sha256:$d (version-free; self-verify only)"
   Fetch-BlobByDigest ($base.TrimEnd('/')) $d $out
 }
 
+# Get-PinnedDigest returns $digest as bare lowercase hex, failing unless it is a full sha256 (optionally
+# 'sha256:'-prefixed, any case).
+function Get-PinnedDigest([string]$digest) {
+  $d = ($digest -replace '^sha256:', '').ToLower()
+  if ($d -notmatch '^[0-9a-f]{64}$') {
+    Fail "invalid pinned digest '$digest' - expected a 64-char sha256 hex (optionally 'sha256:'-prefixed)" 2
+  }
+  return $d
+}
+
+# Manifest pin: one digest for a whole release. Get-PinnedManifest fetches the release's manifest by digest
+# from <base>/blobs/sha256/, self-verifies it and returns it parsed, once its version annotation is a release
+# tag. The digest is the trust anchor, as for -Digest, so no cosign runs.
+function Get-PinnedManifest([string]$base, [string]$digest) {
+  $d = Get-PinnedDigest $digest
+  Write-Host "auspex install: pinning the release manifest by digest sha256:$d (self-verify; no cosign)"
+  $tmp = New-TemporaryFile
+  try {
+    Fetch-BlobByDigest ($base.TrimEnd('/')) $d $tmp.FullName
+    try {
+      $json = Get-Content -Raw -LiteralPath $tmp.FullName | ConvertFrom-Json
+    } catch {
+      Fail "could not parse the pinned manifest - refusing to install" 14
+    }
+  } finally {
+    Remove-Item -LiteralPath $tmp.FullName -Force -ErrorAction SilentlyContinue
+  }
+  $mver = ''
+  if ($json.PSObject.Properties['annotations'] -and $json.annotations.PSObject.Properties['org.opencontainers.image.version']) {
+    $mver = "$($json.annotations.'org.opencontainers.image.version')"
+  }
+  # The version names a URL path, so only the tag shape the release identity signs is accepted.
+  if ($mver -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') {
+    Fail "the pinned manifest's version annotation is not a release tag ('$mver') - refusing to install" 14
+  }
+  Write-Host "auspex install: the pinned manifest is release $mver"
+  return $json
+}
+
+function Get-WindowsArch {
+  switch ($env:PROCESSOR_ARCHITECTURE) {
+    'AMD64' { return 'amd64' }
+    'ARM64' { return 'arm64' }
+    default { Fail "unsupported CPU '$($env:PROCESSOR_ARCHITECTURE)'" 16 }
+  }
+}
+
 # --- derive source ---------------------------------------------------------------------------------------
+if ($ManifestDigest -and ($Digest -or $CaptureDigest)) {
+  Fail "-ManifestDigest pins every binary already - drop -Digest/-CaptureDigest" 2
+}
 if ($CaptureDigest -and -not $Digest) {
   Fail "-CaptureDigest pins auspexw.exe beside a -Digest pin of auspex.exe - pass -Digest too (a version install fetches auspexw.exe itself)" 2
 }
 $pinBase = $null
-if ($Digest) {
+$pinned = $null
+if ($Digest -or $ManifestDigest) {
   # Pin-by-digest needs only a host root (the blob is version/os/arch-free). Prefer -BaseUrl; else derive it
   # from a full -Url (everything before /releases/). No version/os/arch derivation.
   if ($BaseUrl)  { $pinBase = $BaseUrl.TrimEnd('/') }
   elseif ($Url)  { $pinBase = ($Url -replace '/releases/.*$', '') }
-  else { Fail "-Digest needs a host - pass -BaseUrl <url> (or -Url to derive it), or set AUSPEX_DIGEST with AUSPEX_BASE_URL" 2 }
+  else { Fail "a digest pin needs a host - pass -BaseUrl <url> (or -Url to derive it), or set AUSPEX_BASE_URL" 2 }
+  if ($ManifestDigest) {
+    $pinned = Get-PinnedManifest $pinBase $ManifestDigest
+    $mver = "$($pinned.annotations.'org.opencontainers.image.version')"
+    if ($Version -and $Version -ne $mver) { Fail "-Version $Version but the pinned manifest is $mver - refusing" 14 }
+    $Version = $mver
+    $Url = "$pinBase/releases/$Version/windows/$(Get-WindowsArch)/auspex.exe"
+  }
 }
 elseif (-not $Url) {
   if (-not $BaseUrl) { Fail "no artifact source - pass -BaseUrl <url> (your auspex distribution host; see your install instructions) or -Url <full-url>, or set AUSPEX_BASE_URL" 2 }
@@ -236,12 +308,7 @@ elseif (-not $Url) {
     if (-not $Version -or $Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { Fail "resolved 'latest' is not a release tag ('$Version') - pass -Version <tag> or -Digest" 11 }
     Write-Host "auspex install: resolved latest -> $Version"
   }
-  $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-    'AMD64' { 'amd64' }
-    'ARM64' { 'arm64' }
-    default { Fail "unsupported CPU '$($env:PROCESSOR_ARCHITECTURE)'" 16 }
-  }
-  $Url = "$($BaseUrl.TrimEnd('/'))/releases/$Version/windows/$arch/auspex.exe"
+  $Url = "$($BaseUrl.TrimEnd('/'))/releases/$Version/windows/$(Get-WindowsArch)/auspex.exe"
 }
 
 # --- install dir -----------------------------------------------------------------------------------------
@@ -254,9 +321,19 @@ $binDest = Join-Path $BinDir 'auspex.exe'
 # Otherwise verify: cosign resolves the signed version->digest manifest and fetches the BLOB, self-verifying
 # it (the version-path $Url is only the resolution anchor), while checksum/none fetch the version path
 # directly. Only a passing check promotes the temp to $binDest.
+# A manifest pin fetches auspexw.exe too, before either binary is placed.
 $dlTmp = New-TemporaryFile
+$wPinnedTmp = $null
 try {
-  if ($Digest) {
+  if ($pinned) {
+    $arch = ($Url -split '/')[-2]
+    Fetch-BlobByDigest $Url (Select-BinaryDigest $pinned 'application/octet-stream' 'windows' $arch 'pinned manifest') $dlTmp.FullName
+    if (Test-ShipsAuspexw $Url) {
+      $wPinnedTmp = New-TemporaryFile
+      Fetch-BlobByDigest $Url (Select-BinaryDigest $pinned 'application/vnd.microsoft.portable-executable' 'windows' $arch 'pinned manifest') $wPinnedTmp.FullName
+    }
+  }
+  elseif ($Digest) {
     Write-Host "auspex install: pinning by digest (host $pinBase)"
     Acquire-ByDigest $pinBase $Digest $dlTmp.FullName
   }
@@ -270,6 +347,9 @@ try {
     }
   }
   Move-Item -LiteralPath $dlTmp.FullName -Destination $binDest -Force
+} catch {
+  if ($wPinnedTmp) { Remove-Item -LiteralPath $wPinnedTmp.FullName -Force -ErrorAction SilentlyContinue }
+  throw
 } finally {
   if (Test-Path -LiteralPath $dlTmp.FullName) { Remove-Item -LiteralPath $dlTmp.FullName -Force }
 }
@@ -284,7 +364,14 @@ Write-Host "auspex install: installed $binDest"
 # artifact, so auspexw.exe needs its own (-CaptureDigest); without it, from $AuspexwSince on, `auspex install`
 # needs auspexw.exe put beside auspex.exe.
 $wDest = Join-Path $BinDir 'auspexw.exe'
-if ($CaptureDigest) {
+if ($wPinnedTmp) {
+  Move-Item -LiteralPath $wPinnedTmp.FullName -Destination $wDest -Force
+  Write-Host "auspex install: installed $wDest"
+}
+elseif ($pinned) {
+  Write-Host "auspex install: this release predates auspexw.exe - coding-tool hooks will run through auspex.exe"
+}
+elseif ($CaptureDigest) {
   $wTmp = New-TemporaryFile
   try {
     Acquire-ByDigest $pinBase $CaptureDigest $wTmp.FullName

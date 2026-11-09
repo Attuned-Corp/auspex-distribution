@@ -45,8 +45,9 @@ jobs:
       - name: release channel document verify contract
         run: make channel-verify-test
 
-      # The PowerShell installers (bootstrap.ps1, mdm/verify-gate.ps1) are ASCII and parse, and bootstrap.ps1's
-      # release-version gate decides auspexw.exe as intended (pwsh is preinstalled on the GitHub-hosted ubuntu image).
+      # The PowerShell installers (bootstrap.ps1, mdm/verify-gate.ps1) are ASCII and parse, bootstrap.ps1's
+      # release-version gate decides auspexw.exe as intended, and -ManifestDigest installs or refuses end to end
+      # (pwsh is preinstalled on the GitHub-hosted ubuntu image; ps1-windows runs the same under 5.1).
       - name: PowerShell installer contract
         run: make ps1-test
 
@@ -70,6 +71,20 @@ jobs:
           fi
           command -v jq >/dev/null || { echo "::error::jq is needed for the cosign and manifest-pin cases"; exit 1; }
           make verify-test
+
+  # Windows users run the installer under Windows PowerShell 5.1, which parses and behaves differently from the
+  # pwsh 7 the ubuntu job uses. The contract test runs each installer case in a child of the same shell.
+  ps1-windows:
+    name: PowerShell installer contract (Windows PowerShell 5.1)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: bootstrap.ps1 contract (Windows PowerShell 5.1)
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\bootstrap-ps1-test.ps1
 
   changelog:
     name: Validate CHANGELOG.md
@@ -194,6 +209,7 @@ jobs:
     needs:
       - install-verify
       - install-verify-macos
+      - ps1-windows
       - changelog
       - reconcile
     runs-on: ubuntu-latest
