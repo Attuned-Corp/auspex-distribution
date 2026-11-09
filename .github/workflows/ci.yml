@@ -160,18 +160,17 @@ jobs:
           check "channel identity regexp"     "$a_channel"  "$v_channel"
           check "cosign version"              "$a_cosign"   "$v_cosign"
 
-          # The trusted root auspex compiles into its binary must be byte-identical to ours. An auspex ref
-          # from before the in-binary verifier has no copy; that is a notice until the pin moves past it.
+          # The trusted root auspex compiles into its binary must be byte-identical to ours. A copy that
+          # can't be read is drift too, so a move or rename in auspex can't switch this check off.
           a_root="$RUNNER_TEMP/auspex-trusted_root.json"
-          if fetch_raw internal/verify/trusted_root.json >"$a_root" 2>/dev/null; then
-            if cmp -s "$a_root" src/span-auspex/trusted_root.json; then
-              echo "ok trusted_root.json: auspex's embedded copy matches"
-            else
-              echo "::error::DRIFT in trusted_root.json: auspex@${ref} internal/verify/trusted_root.json differs from src/span-auspex/trusted_root.json"
-              rc=1
-            fi
+          if ! fetch_raw internal/verify/trusted_root.json >"$a_root"; then
+            echo "::error::could not read internal/verify/trusted_root.json from auspex@${ref}"
+            rc=1
+          elif cmp -s "$a_root" src/span-auspex/trusted_root.json; then
+            echo "ok trusted_root.json: auspex's embedded copy matches"
           else
-            echo "::notice::auspex@${ref} has no internal/verify/trusted_root.json (it predates the in-binary verifier); trusted root not reconciled"
+            echo "::error::DRIFT in trusted_root.json: auspex@${ref} internal/verify/trusted_root.json differs from src/span-auspex/trusted_root.json"
+            rc=1
           fi
 
           [ "$rc" -eq 0 ] || { echo "::error::verifier config has drifted from auspex's signing descriptor — reconcile before merging"; exit 1; }
