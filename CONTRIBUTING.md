@@ -44,7 +44,9 @@ README's *CI / testing* section.
    `install.sh`'s `COSIGN_VERSION` (and the per-arch SHA-256s) aligned with the
    auspex release signer and the `publish-feature.yml` cosign step, and refresh
    `trusted_root.json` only when Sigstore rotates roots (README →
-   *Updating the pinned cosign / trust root*).
+   *Updating the pinned cosign / trust root*). auspex embeds a copy of
+   `trusted_root.json` for its in-binary verifier, so a refresh lands in both
+   repos; the `reconcile` job fails while they differ.
 5. **Keep history clean.** Use short, scoped, imperative commit subjects.
 6. **Make sure `make verify-test` is green** before you open the PR.
 7. **Open the PR** against `main` and fill in the pull request template.

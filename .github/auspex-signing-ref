@@ -1,6 +1,7 @@
 # Pinned auspex ref the reconcile guard (the `reconcile` job in .github/workflows/ci.yml) fetches the SIGNING
 # DESCRIPTOR from — tools/release/signing-identity.env (artifact and channel identity regexps + OIDC issuer)
-# and Makefile.setup.mk (COSIGN_VERSION) — to diff against this repo's verifier config (src/span-auspex/verify-lib.sh).
+# and Makefile.setup.mk (COSIGN_VERSION) — to diff against this repo's verifier config (src/span-auspex/verify-lib.sh),
+# and internal/verify/trusted_root.json, which must match src/span-auspex/trusted_root.json byte for byte.
 #
 # Set this to a full 40-char commit SHA for tamper-evidence (git content at a pinned SHA is
 # content-addressed, unlike a mutable branch). Bump it in a CODEOWNERS-gated PR when auspex's signing

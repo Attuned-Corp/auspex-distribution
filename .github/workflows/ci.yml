@@ -73,8 +73,9 @@ jobs:
     # Makefile.setup.mk). This repo owns the VERIFIER CONFIG (src/span-auspex/verify-lib.sh). They must
     # agree on the overlapping fields or a verifier here would trust the wrong signer. This pulls auspex's
     # descriptor at a PINNED ref (.github/auspex-signing-ref) via a read-only GitHub App and diffs it,
-    # failing on drift. One-way (this repo pulls; auspex stays passive). trusted_root.json tracks Sigstore,
-    # not auspex, so it has no auspex copy to reconcile.
+    # failing on drift. One-way (this repo pulls; auspex stays passive). trusted_root.json tracks Sigstore and
+    # is owned HERE; auspex embeds a copy (internal/verify/trusted_root.json) for its in-binary verifier, so the
+    # job also fails when that copy differs at the pinned ref. A root refresh here must land in auspex too.
     #
     # Skip fork PRs — the App credential (an environment secret) is never exposed to forks, so the job
     # would only fail spuriously. A skipped reconcile makes CI Gate red (skip != success), so a fork PR
@@ -158,6 +159,20 @@ jobs:
           check "oidc-issuer"                 "$a_issuer"   "$v_issuer"
           check "channel identity regexp"     "$a_channel"  "$v_channel"
           check "cosign version"              "$a_cosign"   "$v_cosign"
+
+          # The trusted root auspex compiles into its binary must be byte-identical to ours. An auspex ref
+          # from before the in-binary verifier has no copy; that is a notice until the pin moves past it.
+          a_root="$RUNNER_TEMP/auspex-trusted_root.json"
+          if fetch_raw internal/verify/trusted_root.json >"$a_root" 2>/dev/null; then
+            if cmp -s "$a_root" src/span-auspex/trusted_root.json; then
+              echo "ok trusted_root.json: auspex's embedded copy matches"
+            else
+              echo "::error::DRIFT in trusted_root.json: auspex@${ref} internal/verify/trusted_root.json differs from src/span-auspex/trusted_root.json"
+              rc=1
+            fi
+          else
+            echo "::notice::auspex@${ref} has no internal/verify/trusted_root.json (it predates the in-binary verifier); trusted root not reconciled"
+          fi
 
           [ "$rc" -eq 0 ] || { echo "::error::verifier config has drifted from auspex's signing descriptor — reconcile before merging"; exit 1; }
           echo "verifier config is in lock-step with auspex@${ref}"
