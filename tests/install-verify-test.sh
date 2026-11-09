@@ -560,9 +560,11 @@ JSON
 #   boot-manifest> <verify-mode> <version> <capture good|bad|absent> <both|auspex>
 # [placeholder] — "placeholder" pre-seeds an old auspex and an auspex-capture link to it. The *-digests runners
 # pin both binaries by digest. The *-manifest runners pin the release by PIN_SUM (default: the served
-# manifest's digest), add BOOT_EXTRA args or FEATURE_EXTRA env, and must never call cosign.
+# manifest's digest), add BOOT_EXTRA args or FEATURE_EXTRA env, and must never call cosign. BOOT_VIA_URL=1
+# gives boot-manifest the host through --url instead of --base-url.
 PIN_SUM=""
 BOOT_EXTRA=""
+BOOT_VIA_URL=""
 FEATURE_EXTRA=""
 capture_check() {
   local label="$1" expect="$2" runner="$3" mode="$4" ver="$5" capture="$6" placed="$7" seed="${8:-}"
@@ -604,9 +606,11 @@ capture_check() {
         bash "$ASSEMBLED_SH" --url "$url" --capture-digest "$CAP_SUM" --bin-dir "$dest" >"$WORK/out.log" 2>&1 || rc=$?
       ;;
     boot-manifest)
+      local source_flag="--base-url" source="$BASE"
+      [ -z "$BOOT_VIA_URL" ] || { source_flag="--url"; source="$url"; }
       # shellcheck disable=SC2086  # BOOT_EXTRA is deliberately word-split into flags
       env -i PATH="${extra_path:+$extra_path:}$PATH" \
-        bash "$ASSEMBLED_SH" --base-url "$BASE" --manifest-digest "${PIN_SUM:-$MANIFEST_SUM}" $BOOT_EXTRA \
+        bash "$ASSEMBLED_SH" "$source_flag" "$source" --manifest-digest "${PIN_SUM:-$MANIFEST_SUM}" $BOOT_EXTRA \
         --bin-dir "$dest" >"$WORK/out.log" 2>&1 || rc=$?
       ;;
     feature-manifest)
@@ -688,7 +692,7 @@ fi
 # <label> <log line wanted> — after a capture_check, which left its output in out.log.
 log_check() {
   if grep -F -- "$2" "$WORK/out.log" >/dev/null; then
-    echo "ok [$1]: output names the pin"
+    echo "ok [$1]: output has '$2'"
     pass=$((pass + 1))
   else
     echo "FAIL [$1]: expected the output to contain '$2'" >&2
@@ -717,6 +721,10 @@ if command -v jq >/dev/null 2>&1 && [ -n "$LATEST_ARCH" ]; then
   capture_check "man-feature-version-mismatch" fail feature-manifest cosign v0.13.0 good   both
   FEATURE_EXTRA="VERSION=v0.13.0"
   capture_check "man-feature-version-match"    ok   feature-manifest cosign v0.13.0 good   both
+  # The host and platform come from binaryUri's release layout, so another shape is refused.
+  FEATURE_EXTRA="BINARYURI=${BASE}/auspex"
+  capture_check "man-feature-bad-layout"       fail feature-manifest cosign v0.13.0 good   both
+  log_check "man-feature-bad-layout" "needs a binaryUri of the form"
   FEATURE_EXTRA=""
   # An in-container path has no host to fetch the manifest from: pin each binary instead.
   rc=0
@@ -764,6 +772,9 @@ if command -v jq >/dev/null 2>&1 && [ -n "$LATEST_ARCH" ]; then
   BOOT_EXTRA="--version v0.13.0"
   capture_check "man-boot-version-match"       ok   boot-manifest cosign v0.13.0 good both
   BOOT_EXTRA=""
+  BOOT_VIA_URL=1
+  capture_check "man-boot-via-url"             ok   boot-manifest cosign v0.13.0 good both # host from --url
+  BOOT_VIA_URL=""
   CAP_OS="linux"
   CAP_ARCH="amd64"
 else
