@@ -15,6 +15,11 @@
       "default": "",
       "description": "Release tag substituted for the literal {{version}} token in binaryUri (e.g. v0.1.0) and recorded alongside the placed binary. Empty is fine for a non-templated binaryUri; a {{version}} template with no version fails the install (there is no mutable 'latest' alias on the download host) unless 'digest' pins the bytes instead."
     },
+    "manifestDigest": {
+      "type": "string",
+      "default": "",
+      "description": "Pin a whole release by content: the sha256 (optionally 'sha256:'-prefixed) of its manifest.json. The install fetches the manifest from <host>/blobs/sha256/<digest> (host taken from binaryUri), self-verifies it, reads the release version from it, and installs auspex and, for 0.13.0 and later, auspex-capture by the digests it lists for the platform in binaryUri. One pin covers every binary and platform, and needs jq (auto-provisioned) but no cosign. A cosign install prints the digest. binaryUri must be an http(s) URL of the form <host>/releases/<version>/<os>/<arch>/auspex ({{version}} may stay empty); 'version', if set, must match the manifest's. Can't be combined with 'digest' or 'captureDigest'."
+    },
     "digest": {
       "type": "string",
       "default": "",

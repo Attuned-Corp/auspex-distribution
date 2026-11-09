@@ -489,15 +489,30 @@ fi
 # ---- auspex-capture beside auspex (auspex 0.13.0 and later) -------------------------------------------
 # From 0.13.0 a missing or tampered auspex-capture fails closed with nothing placed; older releases install
 # auspex alone. Placing it replaces a placeholder link, never writing through it into auspex.
-CAP_RELDIR_OS_ARCH="linux/amd64"
+# The release platform. The manifest-pin runners set it to the host's: the bootstrap installs for the host.
+CAP_OS="linux"
+CAP_ARCH="amd64"
+# MANIFEST_VARIANT breaks the served manifest for the manifest-pin cases: no-version, not-a-tag, no-auspex
+# (no auspex descriptor) or blob-tampered (the blob's bytes don't match the pinned digest).
+MANIFEST_VARIANT=""
+MANIFEST_SUM="" # sha256 of the served manifest.json, set by setup_capture_release
+sha_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'; }
 setup_capture_release() { # <version> <capture: good|bad|absent>
-  local ver="$1" capture="$2" dir="$WEBROOT/releases/$1/${CAP_RELDIR_OS_ARCH}" cap_desc=""
+  local ver="$1" capture="$2" dir="$WEBROOT/releases/$1/${CAP_OS}/${CAP_ARCH}" descs="" cap_media annotations
+  cap_media="application/x-executable"
+  [ "$CAP_OS" = darwin ] && cap_media="application/x-mach-binary"
   rm -rf "$WEBROOT/releases/$ver"
   mkdir -p "$dir" "$WEBROOT/blobs/sha256"
   cp "$WEBROOT/auspex" "$dir/auspex"
   printf '%s  auspex\n' "$GOOD_SUM" >"$dir/auspex.sha256"
   cp "$WEBROOT/auspex" "$WEBROOT/blobs/sha256/${GOOD_SUM}"
   rm -f "$WEBROOT/blobs/sha256/${CAP_SUM}"
+  [ "$MANIFEST_VARIANT" = no-auspex ] || descs="
+    {
+      \"mediaType\": \"application/octet-stream\",
+      \"digest\": \"sha256:${GOOD_SUM}\",
+      \"platform\": { \"os\": \"${CAP_OS}\", \"architecture\": \"${CAP_ARCH}\" }
+    }"
   case "$capture" in
     good | bad)
       cp "$WEBROOT/auspex-capture" "$dir/auspex-capture"
@@ -508,41 +523,52 @@ setup_capture_release() { # <version> <capture: good|bad|absent>
         printf '%s  auspex-capture\n' "0000000000000000000000000000000000000000000000000000000000000000" >"$dir/auspex-capture.sha256"
         printf 'tampered-capture-%s' "$(date +%s)" >"$WEBROOT/blobs/sha256/${CAP_SUM}"
       fi
-      cap_desc=",
+      descs="${descs:+${descs},}
     {
-      \"mediaType\": \"application/x-executable\",
+      \"mediaType\": \"${cap_media}\",
       \"digest\": \"sha256:${CAP_SUM}\",
-      \"platform\": { \"os\": \"linux\", \"architecture\": \"amd64\" }
+      \"platform\": { \"os\": \"${CAP_OS}\", \"architecture\": \"${CAP_ARCH}\" }
     }"
       ;;
     absent) : ;;
+  esac
+  case "$MANIFEST_VARIANT" in
+    no-version) annotations='{}' ;;
+    not-a-tag) annotations='{ "org.opencontainers.image.version": "latest" }' ;;
+    *) annotations="{ \"org.opencontainers.image.version\": \"${ver}\" }" ;;
   esac
   cat >"$WEBROOT/releases/$ver/manifest.json" <<JSON
 {
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.index.v1+json",
-  "manifests": [
-    {
-      "mediaType": "application/octet-stream",
-      "digest": "sha256:${GOOD_SUM}",
-      "platform": { "os": "linux", "architecture": "amd64" }
-    }${cap_desc}
+  "manifests": [${descs}
   ],
-  "annotations": { "org.opencontainers.image.version": "${ver}" }
+  "annotations": ${annotations}
 }
 JSON
   printf 'dummy-new-format-bundle\n' >"$WEBROOT/releases/$ver/manifest.json.cosign.bundle"
+  # The manifest is also a blob, keyed by its own digest.
+  MANIFEST_SUM="$(sha_of "$WEBROOT/releases/$ver/manifest.json")"
+  if [ "$MANIFEST_VARIANT" = blob-tampered ]; then
+    printf 'tampered-manifest-%s' "$(date +%s)" >"$WEBROOT/blobs/sha256/${MANIFEST_SUM}"
+  else
+    cp "$WEBROOT/releases/$ver/manifest.json" "$WEBROOT/blobs/sha256/${MANIFEST_SUM}"
+  fi
 }
 
-# <label> <ok|fail> <feature|feature-digests|boot|boot-digest|boot-digests|boot-capdigest-only> <verify-mode> <version>
-#   <capture good|bad|absent> <both|auspex>
+# <label> <ok|fail> <feature|feature-digests|feature-manifest|boot|boot-digest|boot-digests|boot-capdigest-only|
+#   boot-manifest> <verify-mode> <version> <capture good|bad|absent> <both|auspex>
 # [placeholder] — "placeholder" pre-seeds an old auspex and an auspex-capture link to it. The *-digests runners
-# pin both binaries by digest.
+# pin both binaries by digest. The *-manifest runners pin the release by PIN_SUM (default: the served
+# manifest's digest), add BOOT_EXTRA args or FEATURE_EXTRA env, and must never call cosign.
+PIN_SUM=""
+BOOT_EXTRA=""
+FEATURE_EXTRA=""
 capture_check() {
   local label="$1" expect="$2" runner="$3" mode="$4" ver="$5" capture="$6" placed="$7" seed="${8:-}"
   local dest="$WORK/capdest" url rc=0 extra_path=""
   setup_capture_release "$ver" "$capture"
-  url="${BASE}/releases/${ver}/${CAP_RELDIR_OS_ARCH}/auspex"
+  url="${BASE}/releases/${ver}/${CAP_OS}/${CAP_ARCH}/auspex"
   [ "$mode" = cosign ] && { make_stub_cosign 0; extra_path="$STUB_DIR"; }
   rm -rf "$dest" "$WORK/share"
   mkdir -p "$dest"
@@ -577,11 +603,25 @@ capture_check() {
       env -i PATH="$PATH" \
         bash "$ASSEMBLED_SH" --url "$url" --capture-digest "$CAP_SUM" --bin-dir "$dest" >"$WORK/out.log" 2>&1 || rc=$?
       ;;
+    boot-manifest)
+      # shellcheck disable=SC2086  # BOOT_EXTRA is deliberately word-split into flags
+      env -i PATH="${extra_path:+$extra_path:}$PATH" \
+        bash "$ASSEMBLED_SH" --base-url "$BASE" --manifest-digest "${PIN_SUM:-$MANIFEST_SUM}" $BOOT_EXTRA \
+        --bin-dir "$dest" >"$WORK/out.log" 2>&1 || rc=$?
+      ;;
+    feature-manifest)
+      # shellcheck disable=SC2086  # FEATURE_EXTRA is deliberately word-split into env assignments
+      env -i PATH="${extra_path:+$extra_path:}$PATH" BINARYURI="$url" VERSION="" MANIFESTDIGEST="${PIN_SUM:-$MANIFEST_SUM}" \
+        HOOKSCOPE="user" AUSPEX_BIN_DEST="$dest/auspex" AUSPEX_SHARE_DIR="$WORK/share" $FEATURE_EXTRA \
+        bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+      ;;
   esac
   local got="ok" problem=""
   [ "$rc" -ne 0 ] && got="fail"
   if [ "$got" != "$expect" ]; then
     problem="expected $expect but ${got}ed (rc=$rc)"
+  elif case "$runner" in *-manifest) true ;; *) false ;; esac && [ -s "$COSIGN_CALLS" ]; then
+    problem="a manifest pin called cosign"
   elif [ "$expect" = ok ]; then
     cmp -s "$WEBROOT/auspex" "$dest/auspex" || problem="auspex is missing or not the served bytes"
     if [ "$placed" = both ]; then
@@ -642,6 +682,92 @@ if command -v jq >/dev/null 2>&1; then
   capture_check "cap-boot-cosign-no-desc"   fail boot        cosign   v0.13.0     absent both   # no x-executable descriptor
 else
   echo "skip [capture cosign matrix]: jq not available to parse the fixture manifest"
+fi
+
+# ---- manifest pin: one digest for every binary of a release --------------------------------------------
+# <label> <log line wanted> — after a capture_check, which left its output in out.log.
+log_check() {
+  if grep -F -- "$2" "$WORK/out.log" >/dev/null; then
+    echo "ok [$1]: output names the pin"
+    pass=$((pass + 1))
+  else
+    echo "FAIL [$1]: expected the output to contain '$2'" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+  fi
+}
+manifest_case() { # <MANIFEST_VARIANT> <capture_check args...>
+  MANIFEST_VARIANT="$1"
+  shift
+  capture_check "$@"
+  MANIFEST_VARIANT=""
+}
+
+echo "==> manifest pin (one digest for a whole release)"
+if command -v jq >/dev/null 2>&1 && [ -n "$LATEST_ARCH" ]; then
+  # The Feature takes its platform from binaryUri, so it keeps the default linux/amd64 release.
+  capture_check "man-feature-cosign-prints-pin" ok feature cosign v0.13.0 good both
+  log_check "man-feature-cosign-prints-pin" "manifest digest sha256:${MANIFEST_SUM}"
+  capture_check "man-feature-pin"              ok   feature-manifest cosign v0.13.0 good   both   placeholder
+  capture_check "man-feature-pin-older"        ok   feature-manifest cosign v0.12.9 absent auspex # predates auspex-capture
+  capture_check "man-feature-capture-tampered" fail feature-manifest cosign v0.13.0 bad    both   placeholder
+  FEATURE_EXTRA="DIGEST=${GOOD_SUM}"
+  capture_check "man-feature-with-digest"      fail feature-manifest cosign v0.13.0 good   both
+  FEATURE_EXTRA="VERSION=v0.12.9"
+  capture_check "man-feature-version-mismatch" fail feature-manifest cosign v0.13.0 good   both
+  FEATURE_EXTRA="VERSION=v0.13.0"
+  capture_check "man-feature-version-match"    ok   feature-manifest cosign v0.13.0 good   both
+  FEATURE_EXTRA=""
+  # An in-container path has no host to fetch the manifest from: pin each binary instead.
+  rc=0
+  rm -rf "$WORK/staged" "$WORK/capdest" "$WORK/share"
+  mkdir -p "$WORK/staged" "$WORK/capdest"
+  cp "$WEBROOT/auspex" "$WEBROOT/auspex-capture" "$WORK/staged/"
+  env -i PATH="$PATH" BINARYURI="$WORK/staged/auspex" MANIFESTDIGEST="$MANIFEST_SUM" HOOKSCOPE="user" \
+    AUSPEX_BIN_DEST="$WORK/capdest/auspex" AUSPEX_SHARE_DIR="$WORK/share" \
+    bash "$INSTALL_SH" >"$WORK/out.log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] && [ ! -e "$WORK/capdest/auspex" ] && grep -F "pin each binary with 'digest'" "$WORK/out.log" >/dev/null; then
+    echo "ok [man-feature-local-path]: refused, naming digest/captureDigest"
+    pass=$((pass + 1))
+  else
+    echo "FAIL [man-feature-local-path]: expected a refusal naming digest/captureDigest, with nothing placed (rc=$rc)" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+  fi
+
+  # The bootstrap installs for the host, so these releases use the host's platform.
+  CAP_OS="$LATEST_OS"
+  CAP_ARCH="$LATEST_ARCH"
+  # Round trip: a cosign install prints the pin, and pinning with it installs the same bytes with no cosign.
+  capture_check "man-boot-cosign-prints-pin" ok boot cosign v0.13.0 good both
+  log_check "man-boot-cosign-prints-pin" "manifest digest sha256:${MANIFEST_SUM}"
+  PIN_SUM="$(sed -n 's/.*manifest digest sha256:\([0-9a-f]\{64\}\).*/\1/p' "$WORK/out.log" | head -n 1)"
+  capture_check "man-boot-round-trip"         ok   boot-manifest cosign v0.13.0     good   both   placeholder
+  PIN_SUM=""
+  PIN_SUM="sha256:${MANIFEST_SUM}"
+  capture_check "man-boot-pin-prefixed"       ok   boot-manifest cosign v0.13.0     good   both   # a 'sha256:' pin is accepted
+  PIN_SUM=""
+  capture_check "man-boot-pin-prerelease"     ok   boot-manifest cosign v0.13.0-rc1 good   both   # an rc counts as its base
+  capture_check "man-boot-pin-older"          ok   boot-manifest cosign v0.12.9     absent auspex
+  capture_check "man-boot-no-capture"         fail boot-manifest cosign v0.13.0     absent both   # required from 0.13.0
+  capture_check "man-boot-capture-tampered"   fail boot-manifest cosign v0.13.0     bad    both   placeholder
+  manifest_case no-auspex     "man-boot-no-auspex"      fail boot-manifest cosign v0.13.0 good both
+  manifest_case no-version    "man-boot-no-version"     fail boot-manifest cosign v0.13.0 good both
+  manifest_case not-a-tag     "man-boot-not-a-tag"      fail boot-manifest cosign v0.13.0 good both
+  manifest_case blob-tampered "man-boot-blob-tampered"  fail boot-manifest cosign v0.13.0 good both
+  BOOT_EXTRA="--digest ${GOOD_SUM}"
+  capture_check "man-boot-with-digest"         fail boot-manifest cosign v0.13.0 good both
+  BOOT_EXTRA="--capture-digest ${CAP_SUM}"
+  capture_check "man-boot-with-capture-digest" fail boot-manifest cosign v0.13.0 good both
+  BOOT_EXTRA="--version v0.12.9"
+  capture_check "man-boot-version-mismatch"    fail boot-manifest cosign v0.13.0 good both
+  BOOT_EXTRA="--version v0.13.0"
+  capture_check "man-boot-version-match"       ok   boot-manifest cosign v0.13.0 good both
+  BOOT_EXTRA=""
+  CAP_OS="linux"
+  CAP_ARCH="amd64"
+else
+  echo "skip [manifest pin matrix]: needs jq to parse the fixture manifest and a supported host CPU"
 fi
 
 # A local binaryUri path copies a pre-staged auspex-capture beside it, replacing a placeholder link.

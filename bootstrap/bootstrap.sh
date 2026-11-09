@@ -41,6 +41,7 @@ BIN_DIR="${AUSPEX_BIN_DIR:-}"
 BINARY_URL="${AUSPEX_BINARY_URL:-}" # full override; bypasses BASE_URL/version/os/arch derivation
 DIGEST="${AUSPEX_DIGEST:-}"         # pin a raw sha256 (of the artifact) — installs the version-free blob directly
 CAPTURE_DIGEST="${AUSPEX_CAPTURE_DIGEST:-}" # with --digest: pin auspex-capture's sha256 too
+MANIFEST_DIGEST="${AUSPEX_MANIFEST_DIGEST:-}" # pin a whole release by its manifest's sha256
 
 usage() {
   cat >&2 <<EOF
@@ -49,9 +50,14 @@ auspex-capture binary its hooks run, beside it.
 
   --version <tag>     auspex release tag to install (e.g. v0.1.0). Optional: when omitted (and no
                       --url/--digest), resolves the CDN's 'latest' pointer to a concrete tag, then verifies.
-  --verify <mode>     cosign (default) | checksum | none (ignored with --digest — self-verify is the check)
+  --verify <mode>     cosign (default) | checksum | none (ignored with a digest pin — self-verify is the check)
   --base-url <url>    artifact source base — REQUIRED unless --url (your auspex distribution host / mirror)
   --url <url>         full binary URL (overrides --base-url/--version/os/arch derivation)
+  --manifest-digest <sha256>
+                      pin a whole release by its manifest's sha256: fetch the manifest by digest, self-verify
+                      it, and install every binary it lists for this os/arch by digest. Needs --base-url (or
+                      --url) and jq (provisioned like cosign); no cosign. A cosign install prints the digest.
+                      --version, if given, must match the manifest's.
   --digest <sha256>   pin by content: install <base-url>/blobs/sha256/<digest> directly and self-verify
                       (version-free — survives a re-tag; needs --base-url, or --url to derive the host).
                       Installs auspex only, unless --capture-digest is also given.
@@ -60,8 +66,9 @@ auspex-capture binary its hooks run, beside it.
   --bin-dir <dir>     install dir (default: /usr/local/bin if writable, else \$HOME/.local/bin)
   -h, --help          this help
 
-Env equivalents: AUSPEX_VERSION, AUSPEX_VERIFY, AUSPEX_BASE_URL, AUSPEX_BINARY_URL, AUSPEX_DIGEST,
-AUSPEX_CAPTURE_DIGEST, AUSPEX_BIN_DIR, AUSPEX_COSIGN_BASE_URL (mirror the pinned cosign CLI for air-gapped installs).
+Env equivalents: AUSPEX_VERSION, AUSPEX_VERIFY, AUSPEX_BASE_URL, AUSPEX_BINARY_URL, AUSPEX_MANIFEST_DIGEST,
+AUSPEX_DIGEST, AUSPEX_CAPTURE_DIGEST, AUSPEX_BIN_DIR, AUSPEX_COSIGN_BASE_URL (mirror the pinned cosign CLI for
+air-gapped installs).
 EOF
 }
 
@@ -71,6 +78,7 @@ while [ "$#" -gt 0 ]; do
     --verify) VERIFY="${2:-}"; shift 2 ;;
     --base-url) BASE_URL="${2:-}"; shift 2 ;;
     --url) BINARY_URL="${2:-}"; shift 2 ;;
+    --manifest-digest) MANIFEST_DIGEST="${2:-}"; shift 2 ;;
     --digest) DIGEST="${2:-}"; shift 2 ;;
     --capture-digest) CAPTURE_DIGEST="${2:-}"; shift 2 ;;
     --bin-dir) BIN_DIR="${2:-}"; shift 2 ;;
@@ -83,6 +91,10 @@ case "$VERIFY" in
   cosign | checksum | none) ;;
   *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: --verify must be one of cosign|checksum|none (got '${VERIFY}')" >&2; exit "$AUSPEX_VERIFY_EX_USAGE" ;;
 esac
+if [ -n "$MANIFEST_DIGEST" ] && { [ -n "$DIGEST" ] || [ -n "$CAPTURE_DIGEST" ]; }; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: --manifest-digest pins every binary already — drop --digest/--capture-digest" >&2
+  exit "$AUSPEX_VERIFY_EX_USAGE"
+fi
 if [ -n "$CAPTURE_DIGEST" ] && [ -z "$DIGEST" ]; then
   echo "${AUSPEX_VERIFY_LOG_PREFIX}: --capture-digest pins auspex-capture beside a --digest pin of auspex — pass --digest too (a version install fetches auspex-capture itself)" >&2
   exit "$AUSPEX_VERIFY_EX_USAGE"
@@ -105,7 +117,7 @@ detect_arch() {
 }
 
 PIN_BASE="" # host root for a pin-by-digest fetch
-if [ -n "$DIGEST" ]; then
+if [ -n "$DIGEST" ] || [ -n "$MANIFEST_DIGEST" ]; then
   # Pin-by-digest needs only a host root (the blob is version/os/arch-free). Prefer --base-url; else derive
   # it from a full --url (everything before /releases/). No version/os/arch derivation.
   if [ -n "$BASE_URL" ]; then
@@ -113,7 +125,7 @@ if [ -n "$DIGEST" ]; then
   elif [ -n "$BINARY_URL" ]; then
     PIN_BASE="${BINARY_URL%%/releases/*}"
   else
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --digest needs a host — pass --base-url <url> (or a full --url to derive it), or set AUSPEX_BASE_URL" >&2
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: a digest pin needs a host — pass --base-url <url> (or a full --url to derive it), or set AUSPEX_BASE_URL" >&2
     usage
     exit "$AUSPEX_VERIFY_EX_USAGE"
   fi
@@ -174,6 +186,20 @@ dl_tmp=""
 cap_tmp=""
 _boot_cleanup() { rm -f "${dl_tmp:-}" "${cap_tmp:-}" "${_AUSPEX_EMBEDDED_ROOT:-}"; }
 trap _boot_cleanup EXIT
+
+# A manifest pin resolves to the release's version URL, then installs through the cosign path below, which
+# reads the pinned manifest instead of verifying a signature.
+if [ -n "$MANIFEST_DIGEST" ]; then
+  OS="$(detect_os)"
+  ARCH="$(detect_arch)"
+  acquire_by_manifest_digest "$PIN_BASE" "$MANIFEST_DIGEST" "$OS" "$ARCH"
+  if [ -n "$VERSION" ] && [ "$VERSION" != "$MANIFEST_VERSION" ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --version ${VERSION} but the pinned manifest is ${MANIFEST_VERSION} — refusing" >&2
+    exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+  fi
+  BINARY_URL="$MANIFEST_BINARY_URL"
+  VERIFY=cosign
+fi
 
 dl_tmp="$(mktemp)"
 # Both write the TRUSTED bytes to dl_tmp and only return on success (fail-closed), so a tampered artifact is

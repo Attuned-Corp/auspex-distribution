@@ -20,6 +20,7 @@
 # fetch so the cosign tier never pulls the version-path bytes it would then discard for the blob. To pin a
 # specific artifact regardless of version, acquire_by_digest <base> <digest> <out> fetches straight from the
 # content-addressed blob and self-verifies (the digest is the trust anchor; no version/manifest/cosign/jq).
+# acquire_by_manifest_digest pins a whole release the same way, by its manifest's digest (needs jq, not cosign).
 #
 # TRUST MATERIAL SSOT: the identity regex + OIDC issuer + cosign pins below are the distribution repo's
 # VERIFIER CONFIG (origin-#2 anchor). auspex is canonical for the *signing* descriptor it owns
@@ -338,6 +339,8 @@ raw_binary_media_type() { # <file-name> <os>
 RESOLVED_DIGEST=""
 _VERIFIED_MANIFEST_ROOT=""
 _VERIFIED_MANIFEST_JSON=""
+_VERIFIED_MANIFEST_DIGEST=""
+_VERIFIED_MANIFEST_HOW="signed manifest verified" # or "pinned manifest", once seeded by a manifest pin
 resolve_binary_digest() { # <version_url>
   local url="$1" ver_root version os arch media digest
   ver_root="$(dirname "$(dirname "$(dirname "$url")")")" # .../releases/<v>
@@ -364,7 +367,7 @@ resolve_binary_digest() { # <version_url>
   case "$digest" in
     sha256:*) digest="${digest#sha256:}" ;;
     *)
-      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the signed manifest has no unique raw-binary (${media}) descriptor for ${os}/${arch} — refusing to install" >&2
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the release manifest (${_VERIFIED_MANIFEST_HOW}) has no unique raw-binary (${media}) descriptor for ${os}/${arch} — refusing to install" >&2
       exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
       ;;
   esac
@@ -379,11 +382,12 @@ resolve_binary_digest() { # <version_url>
     exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
   fi
   RESOLVED_DIGEST="$digest"
-  echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved ${version} ${os}/${arch} $(basename "$url") → sha256:${digest} (signed manifest verified)"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved ${version} ${os}/${arch} $(basename "$url") → sha256:${digest} (${_VERIFIED_MANIFEST_HOW})"
 }
 
 # Fetch + keyless-verify <ver_root>/manifest.json and assert its version annotation is <version>; on success
-# keep its bytes in _VERIFIED_MANIFEST_JSON (fails closed otherwise). Leaves cosign/jq for the caller to clean.
+# keep its bytes in _VERIFIED_MANIFEST_JSON and print its digest as a pin for the whole release (fails closed
+# otherwise). Leaves cosign/jq for the caller to clean.
 _verify_release_manifest() { # <ver_root> <version>
   local ver_root="$1" version="$2" manifest bundle m_version
   ensure_cosign
@@ -412,9 +416,12 @@ _verify_release_manifest() { # <ver_root> <version>
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: the signed manifest is for '${m_version:-<none>}' but the requested path is version '${version}' — refusing (version substitution)" >&2
     exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
   fi
+  # Hash the file: $(cat) drops the trailing newline, so the variable's bytes aren't the pinned ones.
+  _VERIFIED_MANIFEST_DIGEST="$(sha256_of "$manifest")"
   _VERIFIED_MANIFEST_JSON="$(cat "$manifest")"
   _VERIFIED_MANIFEST_ROOT="$ver_root"
   rm -f "$manifest" "$bundle"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: manifest digest sha256:${_VERIFIED_MANIFEST_DIGEST} pins every binary of ${version} (signed manifest verified)"
 }
 
 # auspex-capture, the capture-only binary coding-tool hooks run on macOS and Linux (auspex ADR 0068), ships
@@ -520,21 +527,61 @@ acquire_verified() { # <version_url> <mode> <out>
 # is version-free (a re-tag or de-index never moves it). <base> is the CDN/bucket root; a full version URL is
 # also accepted (its root before /releases/ is used), so a caller can reuse the same source it already has.
 acquire_by_digest() { # <base_or_version_url> <digest> <out>
-  local base="$1" digest="$2" out="$3"
-  case "$digest" in sha256:*) digest="${digest#sha256:}" ;; esac
-  digest="$(printf '%s' "$digest" | tr 'A-F' 'a-f')" # normalize a pasted uppercase digest
+  local base="$1" out="$3"
+  normalize_pinned_digest "$2"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinning by digest sha256:${PINNED_DIGEST} (version-free; self-verify only)"
+  fetch_blob_by_digest "$base" "$PINNED_DIGEST" "$out"
+}
+
+# Sets PINNED_DIGEST to <digest> as bare lowercase hex, or exits EX_USAGE unless it is a full sha256
+# (optionally 'sha256:'-prefixed, any case).
+PINNED_DIGEST=""
+normalize_pinned_digest() { # <digest>
+  local digest="${1#sha256:}"
+  digest="$(printf '%s' "$digest" | tr 'A-F' 'a-f')"
   case "$digest" in
     "" | *[!0-9a-f]*)
-      echo "${AUSPEX_VERIFY_LOG_PREFIX}: invalid pinned digest '${2}' — expected a 64-char sha256 hex (optionally 'sha256:'-prefixed)" >&2
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: invalid pinned digest '${1}' — expected a 64-char sha256 hex (optionally 'sha256:'-prefixed)" >&2
       exit "$AUSPEX_VERIFY_EX_USAGE"
       ;;
   esac
   if [ "${#digest}" -ne 64 ]; then
-    echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinned digest '${2}' is not 64 hex chars — expected a full sha256" >&2
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinned digest '${1}' is not 64 hex chars — expected a full sha256" >&2
     exit "$AUSPEX_VERIFY_EX_USAGE"
   fi
-  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinning by digest sha256:${digest} (version-free; self-verify only)"
-  fetch_blob_by_digest "$base" "$digest" "$out"
+  PINNED_DIGEST="$digest"
+}
+
+# Manifest pin: one digest for a whole release. Fetch the release's manifest by digest and self-verify it,
+# read its version, and seed the verified-manifest cache with it, so acquire_verified <MANIFEST_BINARY_URL>
+# cosign resolves every binary from the pinned manifest with no cosign. The digest is the trust anchor, as
+# for acquire_by_digest. Sets MANIFEST_VERSION and MANIFEST_BINARY_URL (<base>/releases/<v>/<os>/<arch>/auspex).
+MANIFEST_VERSION=""
+MANIFEST_BINARY_URL=""
+acquire_by_manifest_digest() { # <base_or_version_url> <digest> <os> <arch>
+  local url="$1" os="$3" arch="$4" base manifest version re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+  normalize_pinned_digest "$2"
+  base="${url%%/releases/*}"
+  base="${base%/}"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pinning the release manifest by digest sha256:${PINNED_DIGEST} (self-verify; no cosign)"
+  ensure_jq
+  manifest="$(mktemp)"
+  fetch_blob_by_digest "$base" "$PINNED_DIGEST" "$manifest"
+  version="$("$JQ_BIN" -r '.annotations["org.opencontainers.image.version"] // empty' "$manifest" 2>/dev/null || true)"
+  # The version names a URL path below, so only the tag shape the release identity signs is accepted.
+  if ! [[ "$version" =~ $re ]]; then
+    rm -f "$manifest"
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: the pinned manifest's version annotation is not a release tag ('${version:-<none>}') — refusing to install" >&2
+    exit "$AUSPEX_VERIFY_EX_DIGEST_ABSENT"
+  fi
+  _VERIFIED_MANIFEST_JSON="$(cat "$manifest")"
+  _VERIFIED_MANIFEST_ROOT="${base}/releases/${version}"
+  _VERIFIED_MANIFEST_DIGEST="$PINNED_DIGEST"
+  _VERIFIED_MANIFEST_HOW="pinned manifest"
+  rm -f "$manifest"
+  MANIFEST_VERSION="$version"
+  MANIFEST_BINARY_URL="${_VERIFIED_MANIFEST_ROOT}/${os}/${arch}/auspex"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: the pinned manifest is release ${version}"
 }
 
 # Provenance check for an artifact carrying its OWN per-artifact cosign bundle (the cross-runner .pkg/.msi,
