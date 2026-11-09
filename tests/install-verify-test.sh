@@ -547,7 +547,6 @@ setup_capture_release() { # <version> <capture: good|bad|absent>
 }
 JSON
   printf 'dummy-new-format-bundle\n' >"$WEBROOT/releases/$ver/manifest.json.cosign.bundle"
-  # The manifest is also a blob, keyed by its own digest.
   MANIFEST_SUM="$(sha_of "$WEBROOT/releases/$ver/manifest.json")"
   if [ "$MANIFEST_VARIANT" = blob-tampered ]; then
     printf 'tampered-manifest-%s' "$(date +%s)" >"$WEBROOT/blobs/sha256/${MANIFEST_SUM}"
@@ -559,9 +558,8 @@ JSON
 # <label> <ok|fail> <feature|feature-digests|feature-manifest|boot|boot-digest|boot-digests|boot-capdigest-only|
 #   boot-manifest> <verify-mode> <version> <capture good|bad|absent> <both|auspex>
 # [placeholder] — "placeholder" pre-seeds an old auspex and an auspex-capture link to it. The *-digests runners
-# pin both binaries by digest. The *-manifest runners pin the release by PIN_SUM (default: the served
-# manifest's digest), add BOOT_EXTRA args or FEATURE_EXTRA env, and must never call cosign. BOOT_VIA_URL=1
-# gives boot-manifest the host through --url instead of --base-url.
+# pin both binaries by digest. The *-manifest runners pin PIN_SUM (default: the served manifest's digest), take
+# BOOT_EXTRA / FEATURE_EXTRA / BOOT_VIA_URL (host via --url), and must never call cosign.
 PIN_SUM=""
 BOOT_EXTRA=""
 BOOT_VIA_URL=""
@@ -721,6 +719,17 @@ if command -v jq >/dev/null 2>&1 && [ -n "$LATEST_ARCH" ]; then
   capture_check "man-feature-version-mismatch" fail feature-manifest cosign v0.13.0 good   both
   FEATURE_EXTRA="VERSION=v0.13.0"
   capture_check "man-feature-version-match"    ok   feature-manifest cosign v0.13.0 good   both
+  # The README's form: a {{version}} template with version empty. The manifest's version is what's recorded.
+  FEATURE_EXTRA="BINARYURI=${BASE}/releases/{{version}}/${CAP_OS}/${CAP_ARCH}/auspex"
+  capture_check "man-feature-template"         ok   feature-manifest cosign v0.13.0 good   both
+  if grep -Fx "AUSPEX_FEATURE_VERSION=v0.13.0" "$WORK/share/feature.env" >/dev/null 2>&1; then
+    echo "ok [man-feature-template]: feature.env records the manifest's version"
+    pass=$((pass + 1))
+  else
+    echo "FAIL [man-feature-template]: feature.env should record AUSPEX_FEATURE_VERSION=v0.13.0" >&2
+    sed 's/^/    /' "$WORK/share/feature.env" >&2 2>/dev/null || true
+    fail=$((fail + 1))
+  fi
   # The host and platform come from binaryUri's release layout, so another shape is refused.
   FEATURE_EXTRA="BINARYURI=${BASE}/auspex"
   capture_check "man-feature-bad-layout"       fail feature-manifest cosign v0.13.0 good   both

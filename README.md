@@ -36,8 +36,9 @@ curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/d
 & ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -Version v0.13.0 -BaseUrl <your-auspex-distribution-host>
 ```
 
-Flags: `--version <tag>` (optional — when omitted, and no `--url`/`--digest`, the installer resolves the
-download host's `latest` pointer to a concrete tag, then verifies against it; pass `--version` to pin),
+Flags: `--version <tag>` (optional — when omitted, and no `--url`, `--manifest-digest` or `--digest`, the
+installer resolves the download host's `latest` pointer to a concrete tag, then verifies against it; pass
+`--version` to pin),
 `--base-url <url>` / `AUSPEX_BASE_URL` (**required** unless `--url` — your auspex distribution host,
 from your install instructions, or an internal mirror), `--verify cosign|checksum|none` (default `cosign`),
 `--manifest-digest <sha256>` (pin a whole release — see [Pinning by digest](#pinning-by-digest)),

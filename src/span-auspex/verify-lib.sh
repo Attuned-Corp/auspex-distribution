@@ -385,9 +385,8 @@ resolve_binary_digest() { # <version_url>
   echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolved ${version} ${os}/${arch} $(basename "$url") → sha256:${digest} (${_VERIFIED_MANIFEST_HOW})"
 }
 
-# Fetch + keyless-verify <ver_root>/manifest.json and assert its version annotation is <version>; on success
-# keep its bytes in _VERIFIED_MANIFEST_JSON and print its digest as a pin for the whole release (fails closed
-# otherwise). Leaves cosign/jq for the caller to clean.
+# Fetch + keyless-verify <ver_root>/manifest.json, require its version to be <version>, cache its bytes and
+# print its digest as a release pin (fails closed otherwise). Leaves cosign/jq for the caller to clean.
 _verify_release_manifest() { # <ver_root> <version>
   local ver_root="$1" version="$2" manifest bundle m_version
   ensure_cosign
@@ -552,10 +551,8 @@ normalize_pinned_digest() { # <digest>
   PINNED_DIGEST="$digest"
 }
 
-# Manifest pin: one digest for a whole release. Fetch the release's manifest by digest and self-verify it,
-# read its version, and seed the verified-manifest cache with it, so acquire_verified <MANIFEST_BINARY_URL>
-# cosign resolves every binary from the pinned manifest with no cosign. The digest is the trust anchor, as
-# for acquire_by_digest. Sets MANIFEST_VERSION and MANIFEST_BINARY_URL (<base>/releases/<v>/<os>/<arch>/auspex).
+# Manifest pin: seeds the verified-manifest cache with the manifest pinned by digest, so acquire_verified
+# <MANIFEST_BINARY_URL> cosign then resolves every binary from it without cosign. Sets MANIFEST_VERSION too.
 MANIFEST_VERSION=""
 MANIFEST_BINARY_URL=""
 acquire_by_manifest_digest() { # <base_or_version_url> <digest> <os> <arch>

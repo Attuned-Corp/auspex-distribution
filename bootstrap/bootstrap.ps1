@@ -232,9 +232,8 @@ function Get-PinnedDigest([string]$digest) {
   return $d
 }
 
-# Manifest pin: one digest for a whole release. Get-PinnedManifest fetches the release's manifest by digest
-# from <base>/blobs/sha256/, self-verifies it and returns it parsed, once its version annotation is a release
-# tag. The digest is the trust anchor, as for -Digest, so no cosign runs.
+# Manifest pin: returns the release manifest pinned by digest, parsed, once it self-verifies and its version
+# is a release tag. The digest is the trust anchor, as for -Digest, so no cosign runs.
 function Get-PinnedManifest([string]$base, [string]$digest) {
   $d = Get-PinnedDigest $digest
   Write-Host "auspex install: pinning the release manifest by digest sha256:$d (self-verify; no cosign)"

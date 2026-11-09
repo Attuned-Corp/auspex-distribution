@@ -45,9 +45,8 @@ jobs:
       - name: release channel document verify contract
         run: make channel-verify-test
 
-      # The PowerShell installers (bootstrap.ps1, mdm/verify-gate.ps1) are ASCII and parse, bootstrap.ps1's
-      # release-version gate decides auspexw.exe as intended, and -ManifestDigest installs or refuses end to end
-      # (pwsh is preinstalled on the GitHub-hosted ubuntu image; ps1-windows runs the same under 5.1).
+      # The PowerShell installers are ASCII and parse, the auspexw.exe gate holds, and -ManifestDigest works end to
+      # end (pwsh is preinstalled on the ubuntu image; ps1-windows runs the same under 5.1).
       - name: PowerShell installer contract
         run: make ps1-test
 

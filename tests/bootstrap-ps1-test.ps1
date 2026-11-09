@@ -1,8 +1,6 @@
 #!/usr/bin/env pwsh
-# PowerShell installer contract: the shipped scripts are ASCII and parse, bootstrap.ps1's release-version
-# gate decides auspexw.exe as intended, and -ManifestDigest installs or refuses as it should.
-# The gate checks load only the functions under test from the script's AST. The -ManifestDigest checks run the
-# whole script against a local fixture tree, so nothing is downloaded.
+# PowerShell installer contract: the shipped scripts are ASCII and parse, the auspexw.exe version gate holds, and
+# -ManifestDigest installs or refuses as it should, run against a local fixture tree so nothing is downloaded.
 # Run: make ps1-test (needs pwsh; preinstalled on the GitHub-hosted ubuntu image).
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot '../bootstrap/bootstrap.ps1'
@@ -66,9 +64,8 @@ foreach ($c in @(
 }
 
 # ---- -ManifestDigest, end to end ----------------------------------------------------------------------
-# Runs the real bootstrap.ps1 in a child process of this same PowerShell, with two functions swapped out: Fetch
-# serves https://cdn.test/ from a fixture tree, and Ensure-Cosign installs a stub that records each call and
-# passes. Everything else, including the flag checks and the placing order, is the shipped code.
+# Runs the real bootstrap.ps1 in a child of this same shell with only Fetch (serves https://cdn.test/ from a
+# fixture tree) and Ensure-Cosign (a recording stub that passes) swapped, so the flag checks and order are real.
 foreach ($n in 'AUSPEX_VERSION', 'AUSPEX_VERIFY', 'AUSPEX_BASE_URL', 'AUSPEX_BINARY_URL', 'AUSPEX_DIGEST',
   'AUSPEX_CAPTURE_DIGEST', 'AUSPEX_MANIFEST_DIGEST', 'AUSPEX_BIN_DIR', 'AUSPEX_COSIGN_BASE_URL') {
   Remove-Item "Env:$n" -ErrorAction SilentlyContinue
@@ -118,9 +115,8 @@ Write-Ascii $wFile ('fake-auspexw-exe-' + [guid]::NewGuid().ToString())
 $exeSum = Get-Sha $exeFile
 $wSum = Get-Sha $wFile
 
-# New-Release writes release $v's signed-manifest layout and blobs, and returns the manifest's digest. $variant
-# breaks it: no-auspex / no-auspexw drop a descriptor, no-version / not-a-tag spoil the version annotation,
-# auspexw-tampered / blob-tampered serve the wrong bytes for auspexw.exe / the manifest.
+# New-Release writes release $v's manifest layout and blobs and returns the manifest's digest. $variant breaks it:
+# no-auspex/no-auspexw, no-version/not-a-tag, or auspexw-tampered/blob-tampered (wrong bytes served).
 function New-Release([string]$v, [string]$variant = '') {
   $blobs = Join-Path $cdn 'blobs/sha256'
   New-Item -ItemType Directory -Force -Path $blobs | Out-Null
