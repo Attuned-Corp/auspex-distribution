@@ -351,7 +351,9 @@ tier auto-provisions to parse the signed manifest (bash only — the PowerShell 
 native JSON); and the Sigstore **`trusted_root.json`** beside it. These pins are the **single source of
 truth** shared by the Feature, the `curl|sh` + PowerShell bootstrap, and the MDM gate; the `reconcile`
 CI job fails if `COSIGN_VERSION`, either identity (the release identity or the channel identity) or the issuer
-drifts from the auspex signer's descriptor.
+drifts from the auspex signer's descriptor, or if the copy of `trusted_root.json` auspex compiles into its
+binary (`internal/verify/trusted_root.json`, for `auspex upgrade` and `auspex version --check`) differs from
+this one.
 Keep `COSIGN_VERSION` in lock-step with the **signer** — the auspex repo's `Makefile.setup.mk`
 `COSIGN_VERSION`, the version the release workflow signs with — and bump them together:
 
@@ -366,6 +368,8 @@ curl -fsSL https://github.com/jqlang/jq/releases/download/<jq-X.Y.Z>/sha256sum.t
 cosign initialize
 cp ~/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json \
    src/span-auspex/trusted_root.json
+# 4) copy the same file to auspex's internal/verify/trusted_root.json in an auspex PR; reconcile fails
+#    while the two differ, so land both and move .github/auspex-signing-ref to the auspex commit.
 ```
 
 Bump the Feature `version` in the same PR (any behavioural change) and re-publish. The
