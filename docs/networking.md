@@ -30,7 +30,7 @@ and fail closed on a mismatch.
 |---|---|---|---|---|---|
 | **Pin-by-digest** (`digest` / `--digest`) | post-trust | CDN (`blobs/sha256/<digest>` only) | — | none — self-verify only, no manifest/cosign/jq | **never** |
 | **MDM verify-gate** (pinned cosign pre-provisioned) | post-trust | CDN | — | none — cosign baked in, no manifest parse (no jq) | **never** |
-| **MDM scheduled update** (macOS) | post-trust | CDN (`releases/channels.json` each run; the `.pkg` when installing) | — (pasted into the MDM) | `github.com` (cosign once, cached; jq only before macOS 15) | **never** |
+| **MDM scheduled update** (macOS) | post-trust | CDN (`releases/channels.json` each run; the `.pkg` when installing) | `github.com` / `objects.githubusercontent.com` (the script, each run, SHA-256-pinned by the pasted loader) | `github.com` (cosign once, cached; jq only before macOS 15) | **never** |
 | **Dev Container Feature** `install.sh` | first-acquisition | CDN | ghcr.io (the Feature itself) | `github.com` (cosign + jq, once/build, unless in image) | **never** |
 | **`curl\|bash` bootstrap** | first-acquisition | CDN | `github.com` / `objects.githubusercontent.com` (the installer) | `github.com` (cosign + jq, unless present/mirrored) | **never** |
 | **`irm\|iex` bootstrap** (Windows) | first-acquisition | CDN | `github.com` / `objects.githubusercontent.com` (the installer) | `github.com` (cosign only — native JSON, no jq) | **never** |

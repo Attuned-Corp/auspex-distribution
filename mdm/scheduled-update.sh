@@ -4,7 +4,7 @@
 # than the installed package, installs that release's .pkg, verified fail-closed with the same recipe as
 # mdm/verify-gate.sh. It also does the first install on a Mac without auspex. See mdm/README.md.
 #
-# Settings, from the environment or the assignments at the top of the assembled script:
+# Settings, from the environment (mdm/scheduled-update-loader.sh passes its own two lines):
 #   AUSPEX_BASE_URL  your auspex download host (https://…), from your install instructions. Required.
 #   AUSPEX_CHANNEL   stable (the default) or latest.
 #
@@ -51,6 +51,13 @@ refuse() { # <exit-code> <message>
   exit "$1"
 }
 
+# An MDM such as Mosyle shows a command's output but not its exit code, so a failed run ends by naming it.
+# Messages avoid apostrophes and quotes, which Mosyle shows HTML-escaped (&apos;).
+report_exit() { # <exit-code>
+  [ "$1" -eq 0 ] || echo "${AUSPEX_VERIFY_LOG_PREFIX}: failed with exit $1 (exit codes: mdm/README.md)" >&2
+  return "$1"
+}
+
 owner_and_mode() { stat -c '%u %a' "$1" 2>/dev/null || stat -f '%u %Lp' "$1"; }
 
 prepare_state() {
@@ -86,7 +93,7 @@ cleanup() {
   [ -z "$LOCK_HELD" ] || rm -rf "$STATE_DIR/lock"
   # The assembled script decodes its embedded trust root to a temp file (bootstrap/assemble.sh).
   [ -z "${_AUSPEX_EMBEDDED_ROOT:-}" ] || rm -f "$_AUSPEX_EMBEDDED_ROOT"
-  return "$rc"
+  report_exit "$rc"
 }
 
 pinned_sha256() { # <COSIGN|JQ> — the verify recipe's pin for this os/arch, or empty
@@ -139,7 +146,7 @@ read_channel() { # <doc-out>
   if [ -f "$record" ]; then
     min="$(cat "$record")"
     case "$min" in
-      "" | *[!0-9]*) refuse "$AUSPEX_UPDATE_EX_STATE" "${record} doesn't hold a sequence number; remove it to start over" ;;
+      "" | *[!0-9]*) refuse "$AUSPEX_UPDATE_EX_STATE" "${record} does not hold a sequence number; remove it to start over" ;;
     esac
   fi
   if [ -n "$min" ]; then
@@ -175,7 +182,7 @@ verify_release_pkg() { # <file> <bundle_src> <tag>
 }
 
 install_release() { # <tag>
-  local tag="$1" staging="$STATE_DIR/staging" url
+  local tag="$1" staging="$STATE_DIR/staging" url got
   url="${AUSPEX_BASE_URL%/}/releases/${tag}/darwin/auspex_${tag#v}_darwin_universal.pkg"
   rm -rf "$staging"
   mkdir -m 0700 "$staging"
@@ -183,21 +190,23 @@ install_release() { # <tag>
   verify_release_pkg "$staging/auspex.pkg" "${url}.cosign.bundle" "$tag"
   "$INSTALLER" -pkg "$staging/auspex.pkg" -target / ||
     refuse "$AUSPEX_UPDATE_EX_INSTALL" "installer failed for auspex ${tag}"
-  [ "v$(installed_version)" = "$tag" ] ||
-    refuse "$AUSPEX_UPDATE_EX_RECEIPT" "installed auspex ${tag}, but the package receipt says '$(installed_version)'"
+  got="$(installed_version)"
+  [ "v$got" = "$tag" ] ||
+    refuse "$AUSPEX_UPDATE_EX_RECEIPT" "installed auspex ${tag}, but the package receipt says ${got:-no version}"
 }
 
 main() {
+  trap 'report_exit $?' EXIT
   [ "$(id -u)" -eq 0 ] || [ -n "${AUSPEX_UPDATE_ALLOW_NONROOT:-}" ] ||
     refuse "$AUSPEX_VERIFY_EX_ENV" "run as root, from an MDM or sudo"
   case "$AUSPEX_CHANNEL" in
     stable | latest) ;;
-    *) refuse "$AUSPEX_VERIFY_EX_USAGE" "AUSPEX_CHANNEL must be stable or latest, not '${AUSPEX_CHANNEL}'" ;;
+    *) refuse "$AUSPEX_VERIFY_EX_USAGE" "AUSPEX_CHANNEL must be stable or latest, not ${AUSPEX_CHANNEL}" ;;
   esac
   case "$AUSPEX_BASE_URL" in
     https://*) ;;
     http://*) is_loopback_url "$AUSPEX_BASE_URL" ||
-      refuse "$AUSPEX_VERIFY_EX_USAGE" "AUSPEX_BASE_URL must be an https URL, not '${AUSPEX_BASE_URL}'" ;;
+      refuse "$AUSPEX_VERIFY_EX_USAGE" "AUSPEX_BASE_URL must be an https URL, not ${AUSPEX_BASE_URL}" ;;
     *) refuse "$AUSPEX_VERIFY_EX_USAGE" "set AUSPEX_BASE_URL to your auspex download host (https://…), from your install instructions" ;;
   esac
 
@@ -217,10 +226,10 @@ main() {
   installed="$(installed_version)"
   case "$installed" in
     "" | [0-9]*.[0-9]*.[0-9]*) ;;
-    *) refuse "$AUSPEX_VERIFY_EX_ENV" "can't read the installed auspex version from its package receipt ('${installed}')" ;;
+    *) refuse "$AUSPEX_VERIFY_EX_ENV" "cannot read the installed auspex version from its package receipt: ${installed}" ;;
   esac
   decision="$(decide "$doc" "$AUSPEX_CHANNEL" "$installed")" ||
-    refuse "$AUSPEX_VERIFY_EX_ENV" "couldn't decide what to install from the channel document"
+    refuse "$AUSPEX_VERIFY_EX_ENV" "could not decide what to install from the channel document"
   action="${decision%% *}"
   target="${decision#* }"
   case "$action" in
@@ -233,7 +242,7 @@ main() {
       install_release "$target"
       result "installed auspex ${target} from ${AUSPEX_CHANNEL} (was ${installed:+v}${installed:-not installed})"
       ;;
-    *) refuse "$AUSPEX_VERIFY_EX_ENV" "couldn't decide what to install from the channel document" ;;
+    *) refuse "$AUSPEX_VERIFY_EX_ENV" "could not decide what to install from the channel document" ;;
   esac
 }
 

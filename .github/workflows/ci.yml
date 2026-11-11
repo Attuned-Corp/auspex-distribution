@@ -80,8 +80,9 @@ jobs:
           command -v jq >/dev/null || { echo "::error::jq is needed for the cosign and manifest-pin cases"; exit 1; }
           make verify-test
 
-      # An MDM such as Mosyle feeds a script to /bin/bash on stdin, so the released single file runs that way.
-      - name: MDM scheduled update contract (released file on stdin, bash 3.2)
+      # An MDM such as Mosyle feeds a script to /bin/bash on stdin, so the released loader runs that way, and it
+      # runs the released single-file script.
+      - name: MDM scheduled update contract (released loader on stdin, bash 3.2)
         run: |
           export PATH="/bin:/usr/bin:/usr/sbin:/sbin:$PATH"
           make scheduled-update-test

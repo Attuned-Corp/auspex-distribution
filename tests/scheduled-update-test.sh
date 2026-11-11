@@ -11,8 +11,8 @@ SCRIPT="${REPO_ROOT}/mdm/scheduled-update.sh"
 VERIFY_LIB="${REPO_ROOT}/src/span-auspex/verify-lib.sh"
 FIX="${REPO_ROOT}/tests/fixtures/channel"
 UPDATE_BASH="${UPDATE_BASH:-bash}" # the macOS CI job runs the script under /bin/bash 3.2
-# ASSEMBLED=1 tests the released form instead: bootstrap/assemble.sh's single file, fed on stdin as an MDM
-# runs it, with its two settings lines removed so each case's environment supplies them.
+# ASSEMBLED=1 runs the released form instead: bootstrap/assemble.sh's single file, as the loader runs it.
+# The loader cases always run the released loader on stdin, as an MDM runs it.
 ASSEMBLED="${ASSEMBLED:-}"
 
 command -v python3 >/dev/null 2>&1 || {
@@ -74,18 +74,16 @@ done
 }
 BASE="http://127.0.0.1:$(cat "$PORT_FILE")"
 
+sha_of() { (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -d ' ' -f 1; }
+
+RELEASE_TAG=test-release "$REPO_ROOT/bootstrap/assemble.sh" "$WORK/dist/auspex-install.sh" >/dev/null
+BUILT="$WORK/dist/auspex-scheduled-update.sh"
+LOADER_SRC="$WORK/dist/auspex-scheduled-update-loader.sh"
+mkdir -p "$WEBROOT/loader"
+cp "$BUILT" "$WEBROOT/loader/auspex-scheduled-update.sh"
 if [ -n "$ASSEMBLED" ]; then
-  "$REPO_ROOT/bootstrap/assemble.sh" "$WORK/dist/auspex-install.sh" >/dev/null
-  built="$WORK/dist/auspex-scheduled-update.sh"
-  for line in 'AUSPEX_BASE_URL=""' 'AUSPEX_CHANNEL="stable"'; do
-    grep -q "^${line} " "$built" || {
-      echo "FAIL: the assembled script has no '${line}' setting" >&2
-      exit 1
-    }
-  done
-  sed -e '/^AUSPEX_BASE_URL="" /d' -e '/^AUSPEX_CHANNEL="stable" /d' "$built" >"$WORK/assembled.sh"
-  SCRIPT="$WORK/assembled.sh"
-  echo "==> assembled script on stdin ($(wc -c <"$built" | tr -d ' ') bytes)"
+  SCRIPT="$BUILT"
+  echo "==> the assembled script ($(wc -c <"$BUILT" | tr -d ' ') bytes)"
 fi
 
 # Stubs. pkgutil reports $CASE/receipt as the installed version; installer logs its call, then sets the
@@ -123,19 +121,23 @@ new_case() {
   cp "$WORK/tools/"* "$CASE/state/bin/"
 }
 
-run_args=("$SCRIPT")
-[ -z "$ASSEMBLED" ] || run_args=(-s)
-
+VIA_LOADER=""
 update() {
+  local cmd=("$UPDATE_BASH" "$SCRIPT") input=/dev/null settings=(AUSPEX_BASE_URL="$BASE")
+  if [ -n "$VIA_LOADER" ]; then # an MDM sets no settings: they come from the loader's own lines
+    cmd=("$UPDATE_BASH" -s)
+    input="$WORK/loader.sh"
+    settings=()
+  fi
   env -i HOME="$CASE" PATH="/usr/bin:/bin" STUB_CASE="$CASE" \
-    AUSPEX_BASE_URL="$BASE" \
+    ${settings[@]+"${settings[@]}"} \
     AUSPEX_UPDATE_STATE_DIR="$CASE/state" \
     AUSPEX_UPDATE_ALLOW_NONROOT=1 \
     AUSPEX_UPDATE_PKGUTIL="$WORK/stub/pkgutil" \
     AUSPEX_UPDATE_INSTALLER="$WORK/stub/installer" \
     AUSPEX_COSIGN_BASE_URL="http://127.0.0.1:9" \
     AUSPEX_JQ_BASE_URL="http://127.0.0.1:9" \
-    "$@" "$UPDATE_BASH" "${run_args[@]}" <"$SCRIPT" >"$CASE/out.log" 2>&1
+    "$@" "${cmd[@]}" <"$input" >"$CASE/out.log" 2>&1
 }
 
 # expect <label> <want-exit> [VAR=value…] -- <check…> — runs update, then each check in this shell.
@@ -176,6 +178,7 @@ said() { grep -qF "$1" "$CASE/out.log"; }
 last_line_says() { tail -n 1 "$CASE/out.log" | grep -qF "$1"; }
 sequence_is() { [ "$(cat "$CASE/state/sequence" 2>/dev/null)" = "$1" ]; }
 tidy() { [ ! -e "$CASE/state/staging" ] && [ ! -e "$CASE/state/tmp" ] && [ ! -e "$CASE/state/lock" ]; }
+failed_with() { last_line_says "failed with exit $1 (exit codes: mdm/README.md)"; }
 cosign_is_pinned() { cmp -s "$CASE/state/bin/cosign" "$WORK/tools/cosign"; }
 installed_verified_pkg() { [ "$(cat "$CASE/installer.log")" = "-pkg $CASE/state/staging/auspex.pkg -target /" ]; }
 
@@ -183,7 +186,7 @@ echo "==> outcomes"
 new_case
 expect "first install: no receipt installs stable" 0 -- \
   'installed_is 0.11.0' 'last_line_says "installed auspex v0.11.0 from stable (was not installed)"' \
-  'sequence_is 1' tidy '! said "unbound variable"' installed_verified_pkg
+  'sequence_is 1' tidy '! said "unbound variable"' installed_verified_pkg '! said "failed with exit"'
 rm -f "$CASE/installer.log"
 expect "a second run is up to date and installs nothing" 0 -- \
   not_installed 'last_line_says "auspex v0.11.0 is up to date with stable"'
@@ -204,7 +207,7 @@ expect "latest is honored" 0 AUSPEX_CHANNEL=latest -- 'installed_is 0.11.0' 'sai
 echo "==> refusals"
 new_case
 printf ' ' >>"$WEBROOT/releases/channels.json"
-expect "a tampered channel document" 13 -- not_installed tidy
+expect "a tampered channel document" 13 -- not_installed tidy 'failed_with 13'
 cp "$FIX/channels.json" "$WEBROOT/releases/"
 
 new_case
@@ -219,7 +222,7 @@ expect "a replayed lower sequence" 19 -- not_installed 'sequence_is 2'
 
 new_case
 echo junk >"$CASE/state/sequence"
-expect "a corrupt sequence record" 21 -- not_installed
+expect "a corrupt sequence record" 21 -- not_installed 'said "does not hold a sequence number"' 'failed_with 21'
 
 new_case
 printf ' ' >>"$PKG"
@@ -237,7 +240,8 @@ expect "a failing installer" 22 -- 'said "installer failed for auspex v0.11.0"' 
 
 new_case
 echo 0.10.0 >"$CASE/installer-sets"
-expect "a receipt that doesn't name the target after install" 23
+expect "a receipt that doesn't name the target after install" 23 -- \
+  'said "but the package receipt says 0.10.0"' 'failed_with 23'
 
 new_case
 echo garbage >"$CASE/receipt"
@@ -303,7 +307,8 @@ new_case
 mkdir "$CASE/state/lock"
 echo "$$" >"$CASE/state/lock/pid"
 expect "a lock held by a live run exits 0 and does nothing" 0 -- not_installed \
-  'last_line_says "another run is in progress; nothing to do"' '[ -d "$CASE/state/lock" ]'
+  'last_line_says "another run is in progress; nothing to do"' '[ -d "$CASE/state/lock" ]' \
+  '! said "failed with exit"'
 
 new_case
 mkdir "$CASE/state/lock"
@@ -313,19 +318,63 @@ expect "a lock left by a run that died is taken over" 0 -- 'installed_is 0.11.0'
 echo "==> settings"
 new_case
 expect "no base URL" 2 AUSPEX_BASE_URL= -- not_installed
-expect "an unknown channel" 2 AUSPEX_CHANNEL=beta -- not_installed
+expect "an unknown channel, named without quotes" 2 AUSPEX_CHANNEL=beta -- not_installed \
+  'said "AUSPEX_CHANNEL must be stable or latest, not beta"' '! grep -q "'"'"'" "$CASE/out.log"' 'failed_with 2'
 expect "a cleartext non-loopback host" 2 AUSPEX_BASE_URL=http://example.com -- not_installed
 if [ "$(id -u)" != 0 ]; then
   expect "not root" 16 AUSPEX_UPDATE_ALLOW_NONROOT= -- not_installed
 fi
-if [ -n "$ASSEMBLED" ]; then
-  sed "s|^AUSPEX_BASE_URL=\"\" |AUSPEX_BASE_URL=\"${BASE}\" |" "$built" >"$WORK/configured.sh"
-  SCRIPT="$WORK/configured.sh"
-  new_case
-  expect "the settings lines at the top of the file, as an admin edits them" 0 AUSPEX_BASE_URL= -- \
-    'installed_is 0.11.0' 'said "from stable"'
-  SCRIPT="$WORK/assembled.sh"
-fi
+
+echo "==> loader"
+holds() { # <label> <command…>
+  if "${@:2}"; then
+    echo "ok   - $1"
+    pass=$((pass + 1))
+  else
+    echo "FAIL - $1"
+    fail=$((fail + 1))
+  fi
+}
+# loader_for <channel> — the released loader with the fixture host and <channel> in its settings lines, and
+# its download pointed at the fixture (loopback http in place of its https-only flags).
+loader_for() {
+  sed -e "s|^AUSPEX_BASE_URL=\"\" |AUSPEX_BASE_URL=\"${BASE}\" |" \
+    -e "s|^AUSPEX_CHANNEL=\"stable\" |AUSPEX_CHANNEL=\"$1\" |" \
+    -e "s|^SCRIPT_URL=.*|SCRIPT_URL=\"${BASE}/loader/auspex-scheduled-update.sh\"|" \
+    -e "s|--proto '=https' --proto-redir '=https'|--proto '=http'|" "$LOADER_SRC" >"$WORK/loader.sh"
+}
+holds "the released loader pins the released script by SHA-256" grep -qx "SCRIPT_SHA256=\"$(sha_of "$BUILT")\"" "$LOADER_SRC"
+holds "the released loader downloads from its own release" \
+  grep -qx 'SCRIPT_URL="https://github.com/Attuned-Corp/auspex-distribution/releases/download/test-release/auspex-scheduled-update.sh"' "$LOADER_SRC"
+holds "the released loader downloads over https only" grep -qF -- "--proto '=https' --proto-redir '=https'" "$LOADER_SRC"
+holds "the released loader is short enough to read" [ "$(wc -l <"$LOADER_SRC")" -le 40 ]
+
+VIA_LOADER=1
+loader_for stable
+new_case
+expect "the loader runs the pinned script with its own settings" 0 -- \
+  'installed_is 0.11.0' 'last_line_says "installed auspex v0.11.0 from stable"' tidy
+
+loader_for latest
+new_case
+expect "the loader passes its channel through" 0 -- 'installed_is 0.11.0' 'said "from latest"'
+
+loader_for beta
+new_case
+expect "a bad channel fails in the script, with one failure line" 2 -- not_installed \
+  'said "not beta"' 'failed_with 2' '[ "$(grep -c "failed with exit" "$CASE/out.log")" = 1 ]'
+
+loader_for stable
+printf ' ' >>"$WEBROOT/loader/auspex-scheduled-update.sh"
+new_case
+expect "a script that does not match the pin is never run" 12 -- not_installed \
+  'said "running nothing"' 'failed_with 12' '[ ! -e "$CASE/state/sequence" ]'
+mv "$WEBROOT/loader/auspex-scheduled-update.sh" "$WORK/held.sh"
+new_case
+expect "a script that cannot be downloaded is never run" 11 -- not_installed 'failed_with 11' \
+  '[ ! -e "$CASE/state/sequence" ]'
+cp "$BUILT" "$WEBROOT/loader/auspex-scheduled-update.sh"
+VIA_LOADER=""
 
 echo "==> decisions"
 # decides <label> <want> <channel> <installed> <json>

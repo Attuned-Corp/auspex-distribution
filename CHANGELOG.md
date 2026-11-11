@@ -42,10 +42,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   recipes) install the release Span has promoted after its soak period, instead of the newest one. It needs
   `--verify cosign`, the default.
 - **Installers** · **Keep macOS fleets on a release channel** — `auspex-scheduled-update.sh` lets an MDM
-  keep Macs on auspex's `stable` (or `latest`) channel without approving each release. Run it as root on a
-  schedule, such as a Mosyle Custom Command. Each run checks the signed channel document, and installs the
-  channel's `.pkg` (verified like the MDM gate) only when it is newer than what's installed. It also does
-  a first install. Exit codes are documented in `mdm/README.md`.
+  keep Macs on auspex's `stable` (or `latest`) channel without approving each release. Paste its short
+  loader, `auspex-scheduled-update-loader.sh`, into a schedule that runs as root, such as a Mosyle Custom
+  Command. The loader runs the script only when it matches the SHA-256 the release pinned. Each run checks
+  the signed channel document, and installs the channel's `.pkg` (verified like the MDM gate) only when it
+  is newer than what's installed. It also does a first install. Exit codes are documented in `mdm/README.md`.
 
 ### Changed
 

@@ -8,7 +8,10 @@
 # Emits (into the OUT dir, default dist/):
 #   auspex-install.sh / .ps1       — curl|sh + irm|iex bootstrap (first-acquisition)
 #   auspex-verify-gate.sh / .ps1   — MDM verify-before-install gate (AC7)
-#   auspex-scheduled-update.sh     — MDM scheduled update (macOS), with its settings at the top
+#   auspex-scheduled-update.sh     — MDM scheduled update (macOS)
+#   auspex-scheduled-update-loader.sh — the short loader an admin pastes, pinned to that script by SHA-256
+#
+#   RELEASE_TAG names the release the loader downloads from (default: unreleased).
 #
 #   bootstrap/assemble.sh [INSTALLER_OUT]     # default INSTALLER_OUT = dist/auspex-install.sh
 set -euo pipefail
@@ -21,6 +24,7 @@ BOOT_PS="$ROOT/bootstrap/bootstrap.ps1"
 GATE="$ROOT/mdm/verify-gate.sh"
 GATE_PS="$ROOT/mdm/verify-gate.ps1"
 UPDATE="$ROOT/mdm/scheduled-update.sh"
+LOADER="$ROOT/mdm/scheduled-update-loader.sh"
 
 OUT="${1:-$ROOT/dist/auspex-install.sh}"
 OUT_DIR="$(dirname "$OUT")"
@@ -28,8 +32,10 @@ OUT_PS="${OUT%.sh}.ps1"
 GATE_OUT="$OUT_DIR/auspex-verify-gate.sh"
 GATE_OUT_PS="$OUT_DIR/auspex-verify-gate.ps1"
 UPDATE_OUT="$OUT_DIR/auspex-scheduled-update.sh"
+LOADER_OUT="$OUT_DIR/auspex-scheduled-update-loader.sh"
+RELEASE_TAG="${RELEASE_TAG:-unreleased}"
 
-for f in "$LIB" "$ROOT_JSON" "$BOOT" "$BOOT_PS" "$GATE" "$GATE_PS" "$UPDATE"; do
+for f in "$LIB" "$ROOT_JSON" "$BOOT" "$BOOT_PS" "$GATE" "$GATE_PS" "$UPDATE" "$LOADER"; do
   [ -f "$f" ] || { echo "assemble: missing input $f" >&2; exit 1; }
 done
 mkdir -p "$OUT_DIR"
@@ -37,11 +43,11 @@ mkdir -p "$OUT_DIR"
 b64="$(base64 < "$ROOT_JSON" | tr -d '\n')"
 
 # Emit a self-contained bash script: shared preamble (embedded trust root + inlined verify-lib.sh) followed
-# by the caller-specific logic file. An optional settings block goes first, where a pasting admin edits it. The single-quoted `$(…)`/`$var` (SC2016) and trailing `\`
+# by the caller-specific logic file. The single-quoted `$(…)`/`$var` (SC2016) and trailing `\`
 # line-continuations (SC1003) are intentional CODEGEN — literal shell emitted into the generated asset, not
 # this script's own expansion.
-emit_bash() { # <logic_file> <out> <banner> [settings]
-  local logic="$1" out="$2" banner="$3" settings="${4:-}"
+emit_bash() { # <logic_file> <out> <banner>
+  local logic="$1" out="$2" banner="$3"
   # shellcheck disable=SC2016,SC1003
   {
     echo '#!/usr/bin/env bash'
@@ -50,7 +56,6 @@ emit_bash() { # <logic_file> <out> <banner> [settings]
     echo '# exact verify recipe + trust anchor as the Dev Container Feature.'
     echo 'set -euo pipefail'
     echo ''
-    [ -z "$settings" ] || printf '%s\n\n' "$settings"
     echo '# --- embedded Sigstore trust root (origin-#2 anchor); decoded to a temp the verify lib reads ------'
     echo '_b64tmp="$(mktemp)"'
     echo "cat > \"\$_b64tmp\" <<'__AUSPEX_ROOT_B64__'"
@@ -106,12 +111,15 @@ emit_ps() { # <template> <out>
 
 emit_bash "$BOOT" "$OUT"      "Self-contained auspex installer for GitHub Releases (origin #2)."
 emit_bash "$GATE" "$GATE_OUT" "Self-contained auspex MDM verify-before-install gate (AC7)."
-emit_bash "$UPDATE" "$UPDATE_OUT" "Self-contained auspex MDM scheduled update (macOS); see mdm/README.md." \
-  '# --- Settings: edit these two lines --------------------------------------------------------------
-AUSPEX_BASE_URL=""      # required: your auspex download host (https://...), from your install instructions
-AUSPEX_CHANNEL="stable" # stable (the default) or latest'
+emit_bash "$UPDATE" "$UPDATE_OUT" "Self-contained auspex MDM scheduled update (macOS); see mdm/README.md."
 emit_ps   "$BOOT_PS" "$OUT_PS"
 emit_ps   "$GATE_PS" "$GATE_OUT_PS"
+
+# The loader an admin pastes pins the scheduled update script above by release tag and SHA-256.
+update_sha="$( (shasum -a 256 "$UPDATE_OUT" 2>/dev/null || sha256sum "$UPDATE_OUT") | cut -d ' ' -f 1)"
+sed -e "s|@TAG@|${RELEASE_TAG}|" -e "s|@SHA256@|${update_sha}|" "$LOADER" >"$LOADER_OUT"
+chmod 0755 "$LOADER_OUT"
+echo "assemble: wrote $LOADER_OUT (pins ${RELEASE_TAG} sha256:${update_sha})"
 
 # Cursor cloud recipe scripts (cursor-cloud/) — staged into dist/ so the Release signs + ships them as
 # first-class assets (parity with the Dev Container Feature). Unlike the installers above they need NO

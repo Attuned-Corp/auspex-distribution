@@ -14,8 +14,8 @@ verify-test:
 channel-verify-test:
 	@./tests/channel-verify-test.sh
 
-# MDM scheduled update contract (mdm/scheduled-update.sh): real signatures, stubbed installer and pkgutil.
-# Downloads the pinned cosign once. ASSEMBLED=1 tests the released single file on stdin, as an MDM runs it.
+# MDM scheduled update contract (mdm/scheduled-update.sh and its loader): real signatures, stubbed installer
+# and pkgutil. Downloads the pinned cosign once. ASSEMBLED=1 runs the released single-file script throughout.
 .PHONY: scheduled-update-test
 scheduled-update-test:
 	@./tests/scheduled-update-test.sh
@@ -40,7 +40,7 @@ shellcheck:
 	@shellcheck -x src/span-auspex/verify-lib.sh src/span-auspex/install.sh \
 		cursor-cloud/install.sh cursor-cloud/start.sh cursor-cloud/preflight.sh \
 		claude-cloud/install.sh claude-cloud/session-start.sh claude-cloud/preflight.sh \
-		bootstrap/bootstrap.sh bootstrap/assemble.sh mdm/verify-gate.sh mdm/scheduled-update.sh \
+		bootstrap/bootstrap.sh bootstrap/assemble.sh mdm/verify-gate.sh mdm/scheduled-update.sh mdm/scheduled-update-loader.sh \
 		tests/install-verify-test.sh tests/channel-verify-test.sh tests/scheduled-update-test.sh
 
 # Docker-backed behavioural smoke of the Feature is a follow-up in this repo (it needs a built auspex
@@ -61,7 +61,7 @@ help:
 	@echo "Targets:"
 	@echo "  verify-test               installer + bootstrap download-verify contract (pure bash+HTTP; the PR gate)"
 	@echo "  channel-verify-test       release channel document verify contract (real cosign; ADR 0066)"
-	@echo "  scheduled-update-test     MDM scheduled update contract (real cosign; ASSEMBLED=1 for the released file)"
+	@echo "  scheduled-update-test     MDM scheduled update + loader contract (real cosign; ASSEMBLED=1 for the released script)"
 	@echo "  ps1-test                  PowerShell installers ASCII + parse, auspexw version gate (needs pwsh)"
 	@echo "  assemble                  build dist/auspex-install.sh|.ps1 from the shared recipe (Release assets)"
 	@echo "  shellcheck                lint all shell scripts"
