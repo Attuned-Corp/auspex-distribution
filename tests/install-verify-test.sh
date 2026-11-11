@@ -900,5 +900,94 @@ gate_check "gate-bad-signature"  13 1      good           # cosign rejects  → 
 gate_check "gate-missing-bundle" 11 0      missing         # no .cosign.bundle → EX_FETCH, fail closed
 gate_check "gate-none-skips"     0  nostub missing none    # explicit opt-out skips verify (needs no cosign)
 
+# ---- --channel: the release the signed channel document names (auspex ADR 0066) ---------------------------
+# With no --version the bootstrap installs the release the channel names: latest v0.13.0 (with auspex-capture)
+# or stable v0.12.9 (auspex alone), so what is placed shows which it chose. The stub cosign stands in for the
+# channel signature too, and every install must have checked it against the channel identity.
+write_channel() { # <json>
+  printf '%s\n' "$1" >"$WEBROOT/releases/channels.json"
+  printf 'dummy-new-format-bundle\n' >"$WEBROOT/releases/channels.json.cosign.bundle"
+}
+make_stub_cosign_rejecting() { # <text> — fails a verify whose arguments contain <text>, passes the rest
+  make_stub_cosign 0
+  {
+    echo '#!/usr/bin/env bash'
+    echo "echo \"\$*\" >>'$COSIGN_CALLS'"
+    echo "case \"\$*\" in *'$1'*) exit 1 ;; esac"
+  } >"$STUB_DIR/cosign"
+}
+CHANNEL_ENV="" # e.g. AUSPEX_CHANNEL=stable, passed to the bootstrap's environment
+channel_check() { # <label> <ok|fail> <both|auspex|none placed> <log line wanted> [bootstrap args…]
+  local label="$1" expect="$2" placed="$3" want="$4" dest="$WORK/chandest" rc=0 got problem=""
+  shift 4
+  rm -rf "$dest"
+  env -i PATH="$STUB_DIR:$PATH" ${CHANNEL_ENV:+"$CHANNEL_ENV"} \
+    bash "${CHANNEL_SCRIPT:-$ASSEMBLED_SH}" --base-url "$BASE" --bin-dir "$dest" "$@" >"$WORK/out.log" 2>&1 || rc=$?
+  got=ok
+  [ "$rc" -ne 0 ] && got=fail
+  if [ "$got" != "$expect" ]; then
+    problem="expected $expect but ${got}ed (rc=$rc)"
+  elif ! grep -F -- "$want" "$WORK/out.log" >/dev/null; then
+    problem="the output lacks '$want'"
+  elif [ "$expect" = ok ] && ! grep -F 'publish-release' "$COSIGN_CALLS" >/dev/null; then
+    problem="the channel document wasn't verified against the channel identity"
+  else
+    case "$placed" in
+      both) cmp -s "$WEBROOT/auspex" "$dest/auspex" && cmp -s "$WEBROOT/auspex-capture" "$dest/auspex-capture" \
+        || problem="auspex and auspex-capture weren't both placed" ;;
+      auspex) cmp -s "$WEBROOT/auspex" "$dest/auspex" && [ ! -e "$dest/auspex-capture" ] \
+        || problem="expected auspex alone" ;;
+      none) [ ! -e "$dest/auspex" ] && [ ! -e "$dest/auspex-capture" ] || problem="a refused install placed a binary" ;;
+    esac
+  fi
+  if [ -n "$problem" ]; then
+    echo "FAIL [$label]: $problem" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+  else
+    echo "ok [$label]: bootstrap ${got} as expected"
+    pass=$((pass + 1))
+  fi
+}
+
+echo "==> curl|sh bootstrap --channel"
+if command -v jq >/dev/null 2>&1 && [ -n "$LATEST_ARCH" ]; then
+  CAP_OS="$LATEST_OS"
+  CAP_ARCH="$LATEST_ARCH"
+  setup_capture_release v0.12.9 absent
+  setup_capture_release v0.13.0 good
+  make_stub_cosign 0
+  write_channel '{"schema":1,"sequence":4,"issued_at":"2026-11-11T22:04:30Z","latest":"v0.13.0","stable":"v0.12.9","minimum":null}'
+  channel_check "chan-default-latest"   ok both   "the latest channel names v0.13.0"
+  CHANNEL_SCRIPT="$BOOTSTRAP_SH" \
+    channel_check "chan-checkout-latest" ok both  "the latest channel names v0.13.0"
+  channel_check "chan-latest"           ok both   "the latest channel names v0.13.0" --channel latest
+  channel_check "chan-stable"           ok auspex "the stable channel names v0.12.9" --channel stable
+  CHANNEL_ENV="AUSPEX_CHANNEL=stable"
+  channel_check "chan-stable-env"       ok auspex "the stable channel names v0.12.9"
+  channel_check "chan-env-with-version" fail none "can't be combined with --version" --version v0.13.0
+  CHANNEL_ENV=""
+  channel_check "chan-with-version"     fail none "can't be combined with --version" --channel stable --version v0.13.0
+  channel_check "chan-with-digest"      fail none "can't be combined with --version" --channel latest --digest "$GOOD_SUM"
+  channel_check "chan-unknown"          fail none "must be latest or stable" --channel beta
+  channel_check "chan-stable-checksum"  fail none "needs --verify cosign" --channel stable --verify checksum
+  write_channel '{"schema":1,"sequence":5,"latest":"v0.13.0","stable":null,"minimum":null}'
+  channel_check "chan-stable-unset"     fail none "the stable channel names no release" --channel stable
+  write_channel '{"schema":1,"sequence":5,"latest":"v0.13.0","stable":"v0.13.0-rc.1","minimum":null}'
+  channel_check "chan-stable-prerelease" fail none "names a pre-release (v0.13.0-rc.1)" --channel stable
+  write_channel '{"schema":1,"sequence":5,"latest":"v0.12.9","stable":"v0.13.0","minimum":"v0.13.0"}'
+  channel_check "chan-below-minimum"    fail none "names v0.12.9, below the minimum"
+  write_channel '{"schema":2,"sequence":5,"latest":"v0.13.0","stable":"v0.12.9","minimum":null}'
+  channel_check "chan-malformed"        fail none "isn't a schema-1 channel document"
+  write_channel '{"schema":1,"sequence":5,"latest":"v0.13.0","stable":"v0.12.9","minimum":null}'
+  make_stub_cosign_rejecting publish-release
+  channel_check "chan-bad-signature"    fail none "against the pinned channel identity"
+  make_stub_cosign 0
+  rm -f "$WEBROOT/releases/channels.json"
+  channel_check "chan-absent"           fail none "could not fetch ${BASE}/releases/channels.json"
+else
+  echo "skip [boot channel matrix]: needs jq and a supported host CPU"
+fi
+
 echo "==> ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

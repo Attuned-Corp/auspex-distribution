@@ -89,7 +89,8 @@ The setup script reads these from its environment (export them, as above — the
 | `AUSPEX_BASE_URL` | yes | your auspex download host / mirror (provided at onboarding), e.g. `https://<your-auspex-download-host>` |
 | `AUSPEX_CLOUD_TOKEN` | yes | your Span org auth token — **provisioned into the identity file at setup** (`auspex auth set`); the in-session daemon enrolls from it |
 | `AUSPEX_CLOUD_WORK_EMAIL` | optional | baked attribution fallback; the `SessionStart` launcher **prefers Claude's per-session `CLAUDE_CODE_USER_EMAIL`** (then git identity) |
-| `AUSPEX_VERSION` | optional | pin a signed release tag; **unset installs the latest** |
+| `AUSPEX_VERSION` | optional | pin a signed release tag; **unset installs the release `AUSPEX_CHANNEL` names** |
+| `AUSPEX_CHANNEL` | optional | `latest` (default) · `stable` — the release channel to follow when `AUSPEX_VERSION` is unset; `stable` needs `AUSPEX_VERIFY=cosign` |
 | `AUSPEX_VERIFY` | optional | `cosign` (default) · `checksum` · `none` |
 
 - All values are read at **setup** (build time). The token is written into auspex's identity file there; nothing

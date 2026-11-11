@@ -1,6 +1,7 @@
 #!/usr/bin/env pwsh
 # PowerShell installer contract: the shipped scripts are ASCII and parse, the auspexw.exe version gate holds, and
-# -ManifestDigest installs or refuses as it should, run against a local fixture tree so nothing is downloaded.
+# -ManifestDigest and -Channel install or refuse as they should, run against a local fixture tree so nothing is
+# downloaded.
 # Run: make ps1-test (needs pwsh; preinstalled on the GitHub-hosted ubuntu image).
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot '../bootstrap/bootstrap.ps1'
@@ -27,7 +28,7 @@ if ($broken) { exit 1 }
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$null, [ref]$parseErrors)
 
-foreach ($name in 'Get-ReleaseVersion', 'Test-ShipsAuspexw') {
+foreach ($name in 'Get-ReleaseVersion', 'Test-ShipsAuspexw', 'Test-TagBelow', 'Split-ReleaseTag', 'Test-SameIds') {
   $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
   if (-not $fn) { Write-Host "FAIL bootstrap.ps1 has no function $name"; exit 1 }
   Invoke-Expression $fn.Extent.Text
@@ -63,10 +64,22 @@ foreach ($c in @(
   Check "ships auspexw $($c[0])" (Test-ShipsAuspexw (Url $c[0])) $c[1]
 }
 
+# Release tag order, as verify-lib.sh's vlt: SemVer 2.0.0 precedence.
+foreach ($c in @(
+    @('v0.9.1', 'v0.10.0', $true), @('v0.10.0', 'v0.9.1', $false), @('v0.10.0', 'v0.10.0', $false),
+    @('v0.10.1', 'v0.10.2', $true), @('v1.0.0', 'v0.99.99', $false),
+    @('v1.0.0-rc.1', 'v1.0.0', $true), @('v1.0.0', 'v1.0.0-rc.1', $false),
+    @('v1.0.0-rc.2', 'v1.0.0-rc.10', $true), @('v1.0.0-rc10', 'v1.0.0-rc2', $true),
+    @('v1.0.0-1', 'v1.0.0-rc', $true), @('v1.0.0-rc', 'v1.0.0-1', $false),
+    @('v1.0.0-rc', 'v1.0.0-rc.1', $true), @('v1.0.0-rc.1', 'v1.0.0-rc.1', $false))) {
+  Check "$($c[0]) below $($c[1])" (Test-TagBelow $c[0] $c[1]) $c[2]
+}
+
 # ---- -ManifestDigest, end to end ----------------------------------------------------------------------
 # Runs the real bootstrap.ps1 in a child of this same shell with only Fetch (serves https://cdn.test/ from a
-# fixture tree) and Ensure-Cosign (a recording stub that passes) swapped, so the flag checks and order are real.
-foreach ($n in 'AUSPEX_VERSION', 'AUSPEX_VERIFY', 'AUSPEX_BASE_URL', 'AUSPEX_BINARY_URL', 'AUSPEX_DIGEST',
+# fixture tree) and Ensure-Cosign (a recording stub) swapped, so the flag checks and order are real. The stub
+# passes, unless $cosignFail holds text its arguments contain.
+foreach ($n in 'AUSPEX_VERSION', 'AUSPEX_CHANNEL', 'AUSPEX_VERIFY', 'AUSPEX_BASE_URL', 'AUSPEX_BINARY_URL', 'AUSPEX_DIGEST',
   'AUSPEX_CAPTURE_DIGEST', 'AUSPEX_MANIFEST_DIGEST', 'AUSPEX_BIN_DIR', 'AUSPEX_COSIGN_BASE_URL') {
   Remove-Item "Env:$n" -ErrorAction SilentlyContinue
 }
@@ -74,6 +87,7 @@ $env:PROCESSOR_ARCHITECTURE = 'AMD64'
 $work = Join-Path ([IO.Path]::GetTempPath()) ('auspex-ps1-test-' + [guid]::NewGuid().ToString())
 $cdn = Join-Path $work 'cdn'
 $cosignLog = Join-Path $work 'cosign.log'
+$cosignFail = Join-Path $work 'cosign.fail'
 New-Item -ItemType Directory -Force -Path $cdn | Out-Null
 
 $swaps = @{
@@ -87,7 +101,11 @@ function Fetch([string]`$u, [string]`$out) {
 "@
   'Ensure-Cosign' = @"
 function Ensure-Cosign { `$script:CosignBin = 'Invoke-StubCosign' }
-function Invoke-StubCosign { Add-Content -LiteralPath '$cosignLog' -Value (`$args -join ' '); `$global:LASTEXITCODE = 0 }
+function Invoke-StubCosign {
+  Add-Content -LiteralPath '$cosignLog' -Value (`$args -join ' ')
+  `$global:LASTEXITCODE = 0
+  if ((Test-Path -LiteralPath '$cosignFail') -and (`$args -join ' ').Contains((Get-Content -Raw -LiteralPath '$cosignFail').Trim())) { `$global:LASTEXITCODE = 1 }
+}
 "@
 }
 $text = [IO.File]::ReadAllText($script)
@@ -98,6 +116,7 @@ foreach ($d in $defs) {
   $text = $text.Substring(0, $d.Extent.StartOffset) + $swaps[$d.Name] + $text.Substring($d.Extent.EndOffset)
 }
 $text = $text.Replace('@@AUSPEX_TRUSTED_ROOT_B64@@', [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('{}')))
+$text = $text.Replace('@@AUSPEX_CHANNEL_IDENTITY_RE@@', 'channel-identity')
 $text = $text -replace '@@AUSPEX_[A-Z0-9_]+@@', 'test'
 $installer = Join-Path $work 'install.ps1'
 [IO.File]::WriteAllText($installer, $text, [Text.Encoding]::ASCII)
@@ -198,6 +217,62 @@ foreach ($c in @(
   $m = New-Release 'v0.13.0' $c[0]
   $null = Test-Install "refused, nothing placed: $($c[0])" @('-BaseUrl', $base, '-ManifestDigest', $m) 'none' $c[1]
 }
+
+# ---- -Channel: the release the signed channel document names -----------------------------------------
+# Write-Channel serves a channel document; Test-Channel runs the installer and checks which release it chose.
+function Write-Channel([string]$json) { Write-Ascii (Join-Path $cdn 'releases/channels.json') $json; Write-Ascii (Join-Path $cdn 'releases/channels.json.cosign.bundle') 'dummy-bundle' }
+function Test-Channel([string]$what, [string[]]$argv, [string]$want, [string]$expect) {
+  $out = Test-Install $what $argv $want $expect
+  if ($want -ne 'none' -and -not ((Test-Path -LiteralPath $cosignLog) -and (Get-Content -Raw -LiteralPath $cosignLog).Contains('channel-identity'))) {
+    Write-Host "FAIL  $what - the channel document wasn't verified against the channel identity"
+    $script:failures++
+  }
+}
+$null = New-Release 'v0.13.0'
+$null = New-Release 'v0.12.0'
+$null = New-Release 'v0.11.0'
+$null = New-Release 'v0.13.1-rc.1'
+Write-Channel '{"schema":1,"sequence":4,"issued_at":"2026-11-11T22:04:30Z","latest":"v0.13.0","stable":"v0.12.0","minimum":null}'
+Test-Channel 'no -Version follows latest' @('-BaseUrl', $base) 'both' 'the latest channel names v0.13.0'
+Test-Channel '-Channel latest' @('-BaseUrl', $base, '-Channel', 'latest') 'both' 'resolved v0.13.0 windows/amd64'
+Test-Channel '-Channel stable' @('-BaseUrl', $base, '-Channel', 'stable') 'both' 'resolved v0.12.0 windows/amd64'
+Test-Channel '-Channel is case-insensitive' @('-BaseUrl', $base, '-Channel', 'Stable') 'both' 'the stable channel names v0.12.0'
+Write-Channel '{"schema":1,"sequence":5,"latest":"v0.13.1-rc.1","stable":"v0.12.0","minimum":"v0.12.0"}'
+Test-Channel 'a pre-release latest installs' @('-BaseUrl', $base) 'both' 'the latest channel names v0.13.1-rc.1'
+foreach ($c in @(
+    @('a stable that names no release', 'stable', '{"schema":1,"sequence":5,"latest":"v0.13.0","stable":null,"minimum":null}', 'the stable channel names no release'),
+    @('a latest that names no release', 'latest', '{"schema":1,"sequence":5,"latest":null,"stable":"v0.12.0","minimum":null}', 'the latest channel names no release'),
+    @('a pre-release stable', 'stable', '{"schema":1,"sequence":5,"latest":"v0.13.1-rc.1","stable":"v0.13.1-rc.1","minimum":null}', 'names a pre-release (v0.13.1-rc.1)'),
+    @('a latest below the minimum', 'latest', '{"schema":1,"sequence":5,"latest":"v0.11.0","stable":"v0.12.0","minimum":"v0.12.0"}', 'names v0.11.0, below the minimum'),
+    @('a minimum without a stable', 'latest', '{"schema":1,"sequence":5,"latest":"v0.13.0","stable":null,"minimum":"v0.12.0"}', "isn't a schema-1 channel document"),
+    @('a minimum above stable', 'latest', '{"schema":1,"sequence":5,"latest":"v0.13.0","stable":"v0.12.0","minimum":"v0.13.0"}', "isn't a schema-1 channel document"),
+    @('schema 2', 'latest', '{"schema":2,"sequence":5,"latest":"v0.13.0","stable":"v0.12.0","minimum":null}', "isn't a schema-1 channel document"),
+    @('a string sequence', 'latest', '{"schema":1,"sequence":"5","latest":"v0.13.0","stable":"v0.12.0","minimum":null}', "isn't a schema-1 channel document"),
+    @('a fractional sequence', 'latest', '{"schema":1,"sequence":5.5,"latest":"v0.13.0","stable":"v0.12.0","minimum":null}', "isn't a schema-1 channel document"),
+    @('a tag that is a path', 'latest', '{"schema":1,"sequence":5,"latest":"v0.13.0/../v0.12.0","stable":"v0.12.0","minimum":null}', "isn't a schema-1 channel document"),
+    @('not JSON', 'latest', 'not json', "isn't a schema-1 channel document"))) {
+  Write-Channel $c[2]
+  $null = Test-Install "refused, nothing placed: $($c[0])" @('-BaseUrl', $base, '-Channel', $c[1]) 'none' $c[3]
+}
+Write-Channel '{"schema":1,"sequence":4,"latest":"v0.13.0","stable":"v0.12.0","minimum":null}'
+Write-Ascii $cosignFail 'channel-identity'
+$null = Test-Install 'refused: a channel document cosign rejects' @('-BaseUrl', $base) 'none' 'against the pinned channel identity'
+Remove-Item -LiteralPath $cosignFail -Force
+Remove-Item -LiteralPath (Join-Path $cdn 'releases/channels.json.cosign.bundle') -Force
+$null = Test-Install 'refused: no channel document bundle' @('-BaseUrl', $base) 'none' 'channels.json.cosign.bundle'
+$null = Test-Install 'refused: -Channel beside -Version' @('-BaseUrl', $base, '-Channel', 'stable', '-Version', 'v0.13.0') 'none' "can't be combined with -Version"
+$null = Test-Install 'refused: an unknown channel' @('-BaseUrl', $base, '-Channel', 'beta') 'none' 'must be latest or stable'
+$null = Test-Install 'refused: -Channel stable without cosign' @('-BaseUrl', $base, '-Channel', 'stable', '-Verify', 'checksum') 'none' 'needs -Verify cosign'
+
+# -Verify checksum can't check the channel document's signature, so it follows the unsigned latest marker.
+$rel = Join-Path $cdn 'releases/v0.13.0/windows/amd64'
+New-Item -ItemType Directory -Force -Path $rel | Out-Null
+Copy-Item -LiteralPath $exeFile -Destination (Join-Path $rel 'auspex.exe') -Force
+Copy-Item -LiteralPath $wFile -Destination (Join-Path $rel 'auspexw.exe') -Force
+Write-Ascii (Join-Path $rel 'auspex.exe.sha256') "$exeSum  auspex.exe"
+Write-Ascii (Join-Path $rel 'auspexw.exe.sha256') "$wSum  auspexw.exe"
+Write-Ascii (Join-Path $cdn 'releases/latest/VERSION') 'v0.13.0'
+$null = Test-Install '-Verify checksum follows the latest marker' @('-BaseUrl', $base, '-Verify', 'checksum') 'both' 'resolved latest -> v0.13.0'
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($failures) { Write-Host "$failures failure(s)"; exit 1 }

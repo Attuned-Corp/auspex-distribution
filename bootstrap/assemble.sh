@@ -73,10 +73,11 @@ emit_bash() { # <logic_file> <out> <banner>
 # @@…@@ placeholders, so verify-lib.sh stays the single source the reconcile guard checks).
 ps_pin() { sed -n "s/^$1='\\(.*\\)'\$/\\1/p" "$LIB" | head -1; }
 identity="$(ps_pin COSIGN_IDENTITY_RE)"
+channel_identity="$(ps_pin COSIGN_CHANNEL_IDENTITY_RE)"
 issuer="$(ps_pin COSIGN_OIDC_ISSUER)"
 cver="$(ps_pin COSIGN_VERSION)"
 winsha="$(ps_pin COSIGN_SHA256_windows_amd64)"
-for v in identity:"$identity" issuer:"$issuer" cver:"$cver" winsha:"$winsha"; do
+for v in identity:"$identity" channel_identity:"$channel_identity" issuer:"$issuer" cver:"$cver" winsha:"$winsha"; do
   [ -n "${v#*:}" ] || { echo "assemble: could not extract ${v%%:*} from $LIB" >&2; exit 1; }
 done
 
@@ -86,6 +87,7 @@ emit_ps() { # <template> <out>
   # identity regex's \ ( ) . + and the base64 blob.
   tpl="$(cat "$template")"
   tpl="${tpl//@@AUSPEX_IDENTITY_RE@@/$identity}"
+  tpl="${tpl//@@AUSPEX_CHANNEL_IDENTITY_RE@@/$channel_identity}"
   tpl="${tpl//@@AUSPEX_OIDC_ISSUER@@/$issuer}"
   tpl="${tpl//@@AUSPEX_COSIGN_VERSION@@/$cver}"
   tpl="${tpl//@@AUSPEX_COSIGN_WINDOWS_AMD64_SHA@@/$winsha}"

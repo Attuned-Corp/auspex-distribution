@@ -23,17 +23,21 @@
 #   AUSPEX_BASE_URL         (required, https)  your auspex download host / mirror (provided at onboarding)
 #   AUSPEX_CLOUD_TOKEN      (required)         org token (span_…); provisioned into the identity file via `auth set`
 #   AUSPEX_CLOUD_WORK_EMAIL (optional)         baked attribution fallback; session prefers CLAUDE_CODE_USER_EMAIL
-#   AUSPEX_VERSION          (optional)         pin a signed auspex BINARY release (--version); unset => CDN 'latest'
+#   AUSPEX_VERSION          (optional)         pin a signed auspex BINARY release (--version); unset => AUSPEX_CHANNEL
+#   AUSPEX_CHANNEL          (default latest)   latest | stable: the release channel to follow when no AUSPEX_VERSION
 #   AUSPEX_VERIFY           (default cosign)   cosign | checksum | none  (cosign needs github.com egress)
 #   AUSPEX_BOOTSTRAP_TAG    (default latest)   the auspex-distribution release carrying the recipe + installer
 set -euo pipefail
 
-AUSPEX_VERSION="${AUSPEX_VERSION:-}"   # optional: unset => the bootstrap resolves the CDN 'latest' pointer
+AUSPEX_VERSION="${AUSPEX_VERSION:-}"   # optional: unset => the release AUSPEX_CHANNEL names
+AUSPEX_CHANNEL="${AUSPEX_CHANNEL:-}"   # optional: unset => the bootstrap follows 'latest'
 AUSPEX_VERIFY="${AUSPEX_VERIFY:-cosign}"
-# Pass --version only when pinned; unset lets the bootstrap default to the CDN 'latest' (resolved to a
-# concrete signed tag, so verify: cosign stays fail-closed). Built as an array so the empty case adds no arg.
+# Pass --version and --channel only when set (the bootstrap refuses the two together). With neither, the
+# bootstrap installs the release the host's signed channel document names for 'latest' — a concrete tag, so
+# verify: cosign stays fail-closed. Built as an array so the empty case adds no arg.
 VERSION_ARGS=()
 [ -n "$AUSPEX_VERSION" ] && VERSION_ARGS=(--version "$AUSPEX_VERSION")
+[ -n "$AUSPEX_CHANNEL" ] && VERSION_ARGS+=(--channel "$AUSPEX_CHANNEL")
 # The recipe scripts + bootstrap installer are published on the auspex-distribution release (tagged
 # installers-vX.Y.Z), INDEPENDENT of the auspex binary version. Resolve from `latest/download` (or a pinned
 # AUSPEX_BOOTSTRAP_TAG); AUSPEX_BOOTSTRAP_URL / AUSPEX_CLOUD_BASE override the derived URLs.

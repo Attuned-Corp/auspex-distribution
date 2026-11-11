@@ -36,6 +36,7 @@ fi
 # from your install instructions) or a full --url. Point it at an internal mirror for an air-gapped fleet.
 BASE_URL="${AUSPEX_BASE_URL:-}"
 VERSION="${AUSPEX_VERSION:-}"
+CHANNEL="${AUSPEX_CHANNEL:-}"
 VERIFY="${AUSPEX_VERIFY:-cosign}"
 BIN_DIR="${AUSPEX_BIN_DIR:-}"
 BINARY_URL="${AUSPEX_BINARY_URL:-}" # full override; bypasses BASE_URL/version/os/arch derivation
@@ -49,7 +50,10 @@ auspex install — fetch, verify, and install the auspex binary, and from auspex
 auspex-capture binary its hooks run, beside it.
 
   --version <tag>     auspex release tag to install (e.g. v0.1.0). Optional: when omitted (and no
-                      --url/--digest), resolves the CDN's 'latest' pointer to a concrete tag, then verifies.
+                      --url/--digest), installs the release the --channel names.
+  --channel <name>    latest (default) | stable: the release channel to install from when no --version is
+                      given, read from the host's signed channel document. --verify checksum|none can't
+                      check that signature, so they take only 'latest', from the unsigned latest marker.
   --verify <mode>     cosign (default) | checksum | none (ignored with a digest pin — self-verify is the check)
   --base-url <url>    artifact source base — REQUIRED unless --url (your auspex distribution host / mirror)
   --url <url>         full binary URL (overrides --base-url/--version/os/arch derivation)
@@ -66,15 +70,16 @@ auspex-capture binary its hooks run, beside it.
   --bin-dir <dir>     install dir (default: /usr/local/bin if writable, else \$HOME/.local/bin)
   -h, --help          this help
 
-Env equivalents: AUSPEX_VERSION, AUSPEX_VERIFY, AUSPEX_BASE_URL, AUSPEX_BINARY_URL, AUSPEX_MANIFEST_DIGEST,
-AUSPEX_DIGEST, AUSPEX_CAPTURE_DIGEST, AUSPEX_BIN_DIR, AUSPEX_COSIGN_BASE_URL (mirror the pinned cosign CLI for
-air-gapped installs).
+Env equivalents: AUSPEX_VERSION, AUSPEX_CHANNEL, AUSPEX_VERIFY, AUSPEX_BASE_URL, AUSPEX_BINARY_URL,
+AUSPEX_MANIFEST_DIGEST, AUSPEX_DIGEST, AUSPEX_CAPTURE_DIGEST, AUSPEX_BIN_DIR, AUSPEX_COSIGN_BASE_URL (mirror the
+pinned cosign CLI for air-gapped installs).
 EOF
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --version) VERSION="${2:-}"; shift 2 ;;
+    --channel) CHANNEL="${2:-}"; shift 2 ;;
     --verify) VERIFY="${2:-}"; shift 2 ;;
     --base-url) BASE_URL="${2:-}"; shift 2 ;;
     --url) BINARY_URL="${2:-}"; shift 2 ;;
@@ -91,6 +96,19 @@ case "$VERIFY" in
   cosign | checksum | none) ;;
   *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: --verify must be one of cosign|checksum|none (got '${VERIFY}')" >&2; exit "$AUSPEX_VERIFY_EX_USAGE" ;;
 esac
+case "$CHANNEL" in
+  "" | latest | stable) ;;
+  *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: --channel must be latest or stable (got '${CHANNEL}')" >&2; exit "$AUSPEX_VERIFY_EX_USAGE" ;;
+esac
+if [ -n "$CHANNEL" ] && { [ -n "$VERSION" ] || [ -n "$BINARY_URL" ] || [ -n "$DIGEST" ] || [ -n "$MANIFEST_DIGEST" ]; }; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: --channel picks the release, so it can't be combined with --version, --url, --digest or --manifest-digest" >&2
+  exit "$AUSPEX_VERIFY_EX_USAGE"
+fi
+if [ -z "$CHANNEL" ]; then CHANNEL=latest; fi
+if [ "$CHANNEL" = stable ] && [ "$VERIFY" != cosign ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: --channel stable reads the signed channel document, which needs --verify cosign — pass --version <tag> instead" >&2
+  exit "$AUSPEX_VERIFY_EX_USAGE"
+fi
 if [ -n "$MANIFEST_DIGEST" ] && { [ -n "$DIGEST" ] || [ -n "$CAPTURE_DIGEST" ]; }; then
   echo "${AUSPEX_VERIFY_LOG_PREFIX}: --manifest-digest pins every binary already — drop --digest/--capture-digest" >&2
   exit "$AUSPEX_VERIFY_EX_USAGE"
@@ -116,6 +134,13 @@ detect_arch() {
   esac
 }
 
+# Clean up the download temps, the cosign and jq the recipe downloaded, and (in the assembled release form) the
+# embedded trust-root temp on any exit.
+dl_tmp=""
+cap_tmp=""
+_boot_cleanup() { rm -f "${dl_tmp:-}" "${cap_tmp:-}" "${_AUSPEX_EMBEDDED_ROOT:-}"; verify_lib_cleanup; }
+trap _boot_cleanup EXIT
+
 PIN_BASE="" # host root for a pin-by-digest fetch
 if [ -n "$DIGEST" ] || [ -n "$MANIFEST_DIGEST" ]; then
   # Pin-by-digest needs only a host root (the blob is version/os/arch-free). Prefer --base-url; else derive
@@ -135,12 +160,15 @@ elif [ -z "$BINARY_URL" ]; then
     usage
     exit "$AUSPEX_VERIFY_EX_USAGE"
   fi
-  if [ -z "$VERSION" ]; then
-    # No explicit --version: resolve the CDN's canonical `latest` pointer to a CONCRETE tag, then verify
-    # against that tag. `releases/latest/` is a mutable mirror of the highest published version and carries a
-    # `VERSION` marker naming the tag it mirrors; resolving to the concrete tag keeps verify: cosign
-    # tag-bound (the signed manifest's version annotation must equal the tag in the URL — a bare "latest"
-    # would fail that check). Pass --version <tag> (or --digest) to pin instead.
+  if [ -z "$VERSION" ] && [ "$VERIFY" = cosign ]; then
+    # No explicit --version: install the release the channel names in the host's signed channel document
+    # (auspex ADR 0066). The tag stays concrete, so verify: cosign still binds the manifest to it.
+    resolve_channel_release "$BASE_URL" "$CHANNEL"
+    VERSION="$CHANNEL_RELEASE"
+  elif [ -z "$VERSION" ]; then
+    # checksum/none run no cosign, so they can't check the channel document's signature. They follow `latest`
+    # through the CDN's unsigned `releases/latest/VERSION` marker, resolved to a CONCRETE tag; the checksum
+    # sidecar then checks that tag's bytes.
     # The marker is unsigned, so fetch it like every other download (https-only, no downgrade redirect, capped)
     # and accept only a full release tag — the shape the release identity signs, with no room for a path.
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: no --version given — resolving latest from ${BASE_URL%/}/releases/latest/VERSION" >&2
@@ -181,12 +209,6 @@ BIN_DEST="${BIN_DIR%/}/auspex"
 CAPTURE_DEST="${BIN_DIR%/}/auspex-capture"
 
 # --- fetch → verify (fail-closed) → place ----------------------------------------------------------------
-# Clean up the download temps AND (in the assembled release form) the embedded trust-root temp on any exit.
-dl_tmp=""
-cap_tmp=""
-_boot_cleanup() { rm -f "${dl_tmp:-}" "${cap_tmp:-}" "${_AUSPEX_EMBEDDED_ROOT:-}"; }
-trap _boot_cleanup EXIT
-
 # A manifest pin resolves to the release's version URL, then installs through the cosign path below, which
 # reads the pinned manifest instead of verifying a signature.
 if [ -n "$MANIFEST_DIGEST" ]; then
