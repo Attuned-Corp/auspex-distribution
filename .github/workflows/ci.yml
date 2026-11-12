@@ -45,10 +45,19 @@ jobs:
       - name: release channel document verify contract
         run: make channel-verify-test
 
+      - name: MDM scheduled update contract
+        run: make scheduled-update-test
+
       # The PowerShell installers are ASCII and parse, the auspexw.exe gate holds, and -ManifestDigest works end to
       # end (pwsh is preinstalled on the ubuntu image; ps1-windows runs the same under 5.1).
       - name: PowerShell installer contract
         run: make ps1-test
+
+      # Last, as it removes jq: a Mac before macOS 15 has no /usr/bin/jq, so the script caches the pinned one.
+      - name: MDM scheduled update contract (no system jq)
+        run: |
+          sudo rm /usr/bin/jq
+          make scheduled-update-test
 
   # macOS runs `curl | bash` with its own /bin/bash, 3.2, which lacks features newer bash has. Same contract,
   # on that shell. jq is required so the cosign and manifest-pin cases run rather than skip.
@@ -70,6 +79,14 @@ jobs:
           fi
           command -v jq >/dev/null || { echo "::error::jq is needed for the cosign and manifest-pin cases"; exit 1; }
           make verify-test
+
+      # An MDM such as Mosyle feeds a script to /bin/bash on stdin, so the released loader runs that way, and it
+      # runs the released single-file script.
+      - name: MDM scheduled update contract (released loader on stdin, bash 3.2)
+        run: |
+          export PATH="/bin:/usr/bin:/usr/sbin:/sbin:$PATH"
+          make scheduled-update-test
+          ASSEMBLED=1 UPDATE_BASH=/bin/bash make scheduled-update-test
 
   # Windows users run the installer under Windows PowerShell 5.1, which parses and behaves differently from the
   # pwsh 7 the ubuntu job uses. The contract test runs each installer case in a child of the same shell.
@@ -208,8 +225,24 @@ jobs:
             rc=1
           fi
 
-          [ "$rc" -eq 0 ] || { echo "::error::verifier config has drifted from auspex's signing descriptor — reconcile before merging"; exit 1; }
-          echo "verifier config is in lock-step with auspex@${ref}"
+          # The managed uninstall must remove the scheduled update script's state directory, or a reinstall
+          # inherits a stale cosign cache and replay floor.
+          state_dir="$(sed -n 's/^STATE_DIR="\${AUSPEX_UPDATE_STATE_DIR:-\(.*\)}"$/\1/p' mdm/scheduled-update.sh)"
+          if [ -z "$state_dir" ]; then
+            echo "::error::could not read the state directory from mdm/scheduled-update.sh"
+            rc=1
+          elif ! uninstall="$(fetch_raw package/macos/uninstall-managed.sh)"; then
+            echo "::error::could not read package/macos/uninstall-managed.sh from auspex@${ref}"
+            rc=1
+          elif printf '%s\n' "$uninstall" | grep -qF "\"${state_dir}\""; then
+            echo "ok uninstall-managed.sh removes ${state_dir}"
+          else
+            echo "::error::DRIFT: auspex@${ref} package/macos/uninstall-managed.sh doesn't name ${state_dir}, mdm/scheduled-update.sh's state directory"
+            rc=1
+          fi
+
+          [ "$rc" -eq 0 ] || { echo "::error::this repo has drifted from auspex@${ref} — reconcile before merging"; exit 1; }
+          echo "this repo is in lock-step with auspex@${ref}"
 
   # The ONE status check to mark "required" in the branch ruleset. It waits on every job above and is green
   # only when they ALL succeeded — so the required-check config is decoupled from the job topology.

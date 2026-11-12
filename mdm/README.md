@@ -18,8 +18,9 @@ and the `curl | bash` bootstrap use — so there is a single verifier to maintai
 |---|---|---|---|
 | `mdm/verify-gate.sh` | macOS / any bash runner | `.pkg` + its `.cosign.bundle` | the mechanically-tested core (`tests/install-verify-test.sh`) |
 | `mdm/verify-gate.ps1` | Windows / Intune | `.msi` + its `.cosign.bundle` | PowerShell-native mirror; trust material injected at assembly |
+| `mdm/scheduled-update.sh` | macOS | the channel document, then the `.pkg` + its `.cosign.bundle` | verifies **and installs** on a schedule, run by the pasted `mdm/scheduled-update-loader.sh`; see [below](#macos--keep-auspex-up-to-date-on-a-schedule) (`tests/scheduled-update-test.sh`) |
 
-Both **verify only** — they do **not** run the native installer. The MDM recipe chains the install **after**
+The two gates **verify only** — they do **not** run the native installer. The MDM recipe chains the install **after**
 a successful verify, so a non-zero exit **aborts the deploy** (fail-closed). Use the **self-contained
 assembled** forms published on this repo's GitHub Releases (origin #2) — they inline the verify recipe and
 embed the trust anchor, so the runner fetches one file:
@@ -59,6 +60,58 @@ curl -fsSL --proto '=https' --proto-redir '=https' -o "$GATE" \
 bash "$GATE" --url "$PKG" --out "$STAGE" \
   && installer -pkg "$STAGE" -target /
 ```
+
+## macOS — keep auspex up to date on a schedule
+
+`auspex-scheduled-update.sh` keeps a Mac on a release channel without approving each release. An MDM runs it
+as root on a schedule, such as a Mosyle Custom Command, through a short loader. Each run:
+
+1. verifies the signed release channel document (`releases/channels.json`) against the pinned channel
+   signer, and refuses a document older than one it has already accepted (auspex ADR 0066);
+2. picks the channel's release: `stable` by default, or `latest`;
+3. does nothing when the installed package is that release or newer;
+4. otherwise downloads that release's `.pkg`, verifies it the way the gate does but requires that release's
+   own signature, and installs it with `installer`. A Mac without auspex gets its first install the same way.
+
+Whatever release the channel names installs with no per-release approval. To approve each release, use the
+gate above instead. A forged channel document can't install a build auspex didn't sign; at worst it holds a
+Mac back.
+
+Paste the loader, `auspex-scheduled-update-loader.sh` from a release (about 30 lines), into the MDM's script
+field, and set the two lines at its top:
+
+```bash
+AUSPEX_BASE_URL=""      # required: your auspex download host (https://...), from your install instructions
+AUSPEX_CHANNEL="stable" # stable (the default) or latest
+```
+
+Each run, the loader downloads `auspex-scheduled-update.sh` from the same release on GitHub, checks it against
+the SHA-256 the release wrote into the loader, and runs it with those two settings. A download that doesn't
+match runs nothing, so a damaged paste or a tampered download fails closed. To update the script, paste a
+newer release's loader. You can check the loader you downloaded against its `.cosign.bundle`, as for the
+other release files.
+
+It keeps its state in `/Library/Application Support/auspex-update/`, a root-owned 0700 directory: the pinned
+cosign, downloaded once and hash-checked before each use, and the last channel sequence it accepted. auspex's
+managed uninstall script removes it. Each run's last line of output is its result. An MDM may not show exit
+codes (Mosyle shows only the output), so a failed run's last line names its code, for example
+`auspex update: failed with exit 13 (exit codes: mdm/README.md)`.
+
+| Exit | Meaning |
+|---|---|
+| `0` | Installed, or nothing to do: up to date, ahead of the channel, a channel that names no release, or another run in progress |
+| `2` | A setting is missing or invalid |
+| `11` | A download failed (the script, by the loader, or a file the script needs) |
+| `12` | The downloaded script doesn't match the loader's pinned SHA-256; nothing ran |
+| `13` | A signature didn't verify |
+| `15` / `17` | The pinned cosign / jq couldn't be provisioned |
+| `16` | Environment: not root, an unreadable package receipt, or an unsupported platform |
+| `18` | The channel document is signed but malformed |
+| `19` | The channel document is older than one already accepted (a replay) |
+| `20` | The channel names a release this script won't install: a pre-release `stable`, or one below the minimum |
+| `21` | The state directory or its sequence record isn't safe to use |
+| `22` | `installer` failed |
+| `23` | After the install, the package receipt doesn't name the release |
 
 ## Windows — Intune (Win32 / line-of-business wrapper)
 

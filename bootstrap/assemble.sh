@@ -8,6 +8,10 @@
 # Emits (into the OUT dir, default dist/):
 #   auspex-install.sh / .ps1       — curl|sh + irm|iex bootstrap (first-acquisition)
 #   auspex-verify-gate.sh / .ps1   — MDM verify-before-install gate (AC7)
+#   auspex-scheduled-update.sh     — MDM scheduled update (macOS)
+#   auspex-scheduled-update-loader.sh — the short loader an admin pastes, pinned to that script by SHA-256
+#
+#   RELEASE_TAG names the release the loader downloads from (default: unreleased).
 #
 #   bootstrap/assemble.sh [INSTALLER_OUT]     # default INSTALLER_OUT = dist/auspex-install.sh
 set -euo pipefail
@@ -19,14 +23,19 @@ BOOT="$ROOT/bootstrap/bootstrap.sh"
 BOOT_PS="$ROOT/bootstrap/bootstrap.ps1"
 GATE="$ROOT/mdm/verify-gate.sh"
 GATE_PS="$ROOT/mdm/verify-gate.ps1"
+UPDATE="$ROOT/mdm/scheduled-update.sh"
+LOADER="$ROOT/mdm/scheduled-update-loader.sh"
 
 OUT="${1:-$ROOT/dist/auspex-install.sh}"
 OUT_DIR="$(dirname "$OUT")"
 OUT_PS="${OUT%.sh}.ps1"
 GATE_OUT="$OUT_DIR/auspex-verify-gate.sh"
 GATE_OUT_PS="$OUT_DIR/auspex-verify-gate.ps1"
+UPDATE_OUT="$OUT_DIR/auspex-scheduled-update.sh"
+LOADER_OUT="$OUT_DIR/auspex-scheduled-update-loader.sh"
+RELEASE_TAG="${RELEASE_TAG:-unreleased}"
 
-for f in "$LIB" "$ROOT_JSON" "$BOOT" "$BOOT_PS" "$GATE" "$GATE_PS"; do
+for f in "$LIB" "$ROOT_JSON" "$BOOT" "$BOOT_PS" "$GATE" "$GATE_PS" "$UPDATE" "$LOADER"; do
   [ -f "$f" ] || { echo "assemble: missing input $f" >&2; exit 1; }
 done
 mkdir -p "$OUT_DIR"
@@ -102,8 +111,15 @@ emit_ps() { # <template> <out>
 
 emit_bash "$BOOT" "$OUT"      "Self-contained auspex installer for GitHub Releases (origin #2)."
 emit_bash "$GATE" "$GATE_OUT" "Self-contained auspex MDM verify-before-install gate (AC7)."
+emit_bash "$UPDATE" "$UPDATE_OUT" "Self-contained auspex MDM scheduled update (macOS); see mdm/README.md."
 emit_ps   "$BOOT_PS" "$OUT_PS"
 emit_ps   "$GATE_PS" "$GATE_OUT_PS"
+
+# The loader an admin pastes pins the scheduled update script above by release tag and SHA-256.
+update_sha="$( (shasum -a 256 "$UPDATE_OUT" 2>/dev/null || sha256sum "$UPDATE_OUT") | cut -d ' ' -f 1)"
+sed -e "s|@TAG@|${RELEASE_TAG}|" -e "s|@SHA256@|${update_sha}|" "$LOADER" >"$LOADER_OUT"
+chmod 0755 "$LOADER_OUT"
+echo "assemble: wrote $LOADER_OUT (pins ${RELEASE_TAG} sha256:${update_sha})"
 
 # Cursor cloud recipe scripts (cursor-cloud/) — staged into dist/ so the Release signs + ships them as
 # first-class assets (parity with the Dev Container Feature). Unlike the installers above they need NO
