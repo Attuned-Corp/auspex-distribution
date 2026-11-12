@@ -256,7 +256,8 @@ foreach ($c in @(
 }
 Write-Channel '{"schema":1,"sequence":4,"latest":"v0.13.0","stable":"v0.12.0","minimum":null}'
 Write-Ascii $cosignFail 'channel-identity'
-$null = Test-Install 'refused: a channel document cosign rejects' @('-BaseUrl', $base) 'none' 'against the pinned channel identity'
+# 5.1 splits a long error across records, so match only its start.
+$null = Test-Install 'refused: a channel document cosign rejects' @('-BaseUrl', $base) 'none' 'cosign FAILED to verify https://cdn.test/releases/channels.json'
 Remove-Item -LiteralPath $cosignFail -Force
 Remove-Item -LiteralPath (Join-Path $cdn 'releases/channels.json.cosign.bundle') -Force
 $null = Test-Install 'refused: no channel document bundle' @('-BaseUrl', $base) 'none' 'channels.json.cosign.bundle'

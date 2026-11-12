@@ -196,7 +196,7 @@ done
 from_dir() { # <dir> <cmd…>
   local dir="$1"
   shift
-  # shellcheck disable=SC2329 # replaces the library's fetch, which resolve_channel_release calls
+  # shellcheck disable=SC2317,SC2329 # replaces the library's fetch, which resolve_channel_release calls
   fetch() { [ -f "${dir}/${1##*/}" ] && cp "${dir}/${1##*/}" "$2"; }
   "$@"
 }
