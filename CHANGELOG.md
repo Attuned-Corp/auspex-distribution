@@ -35,6 +35,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Installers** · **Follow the `stable` channel** — `--channel stable` (macOS / Linux installer), `-Channel
+  stable` (Windows installer) and `AUSPEX_CHANNEL=stable` (the installers and the Claude and Cursor cloud
+  recipes) install the release Span has promoted after its soak period, instead of the newest one. It needs
+  `--verify cosign`, the default.
+
+### Changed
+
+- **Installers** · **Unpinned installs read the signed channel document** — without `--version`, the
+  installers now take the release from the download host's signed `releases/channels.json`, checked against
+  its own pinned signer, instead of the unsigned `releases/latest/VERSION` marker. The default channel is
+  still `latest`, so an unpinned install gets the same release as before. They refuse a channel that names
+  no release, a pre-release on `stable`, or a release below the document's minimum. `--verify checksum` and
+  `none`, which run no cosign, keep reading the marker.
+
 ## [2026-11-11]
 
 Published components:

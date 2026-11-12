@@ -56,6 +56,7 @@ AUSPEX_VERIFY_EX_JQ_PROVISION=17  # pinned jq could not be provisioned (download
                                   # only by the cosign tier to parse the signed manifest
 AUSPEX_VERIFY_EX_CHANNEL_INVALID=18 # a correctly signed channel document isn't a schema-1 document
 AUSPEX_VERIFY_EX_CHANNEL_REPLAY=19  # the channel document's sequence is below the caller's --min-sequence
+AUSPEX_VERIFY_EX_CHANNEL_REFUSED=20 # the channel names no release, a pre-release `stable`, or one below `minimum`
 
 # Pinned keyless-signing identity for the auspex release workflow — the binary SIGNER lives in the private
 # Attuned-Corp/auspex repo, so this stays in LOCK-STEP with that repo's signing descriptor
@@ -102,7 +103,7 @@ JQ_BASE_URL="${AUSPEX_JQ_BASE_URL:-https://github.com/jqlang/jq/releases/downloa
 # Pinned Sigstore trust root, shipped beside this library (or handed in via AUSPEX_TRUSTED_ROOT for an
 # assembled/embedded bootstrap). cosign v3 verifies the new-format bundle's embedded Rekor inclusion proof
 # against these keys, so verify: cosign is FULLY LOCAL — no TUF, no Rekor network.
-_AUSPEX_VERIFY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_AUSPEX_VERIFY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)" # BASH_SOURCE is empty when bash reads stdin
 TRUSTED_ROOT="${AUSPEX_TRUSTED_ROOT:-${_AUSPEX_VERIFY_LIB_DIR}/trusted_root.json}"
 
 # Download caps (defense-in-depth against a hung / oversized origin). The ceiling comfortably covers the
@@ -626,6 +627,30 @@ verify_cosign_bundle() { # <file> <bundle_src>
 # schema 1, well-formed tags and `minimum` <= `stable`, as auspex's own reader does. --min-sequence N refuses
 # a lower `sequence`, a replay (ADR 0066 §3). Sets CHANNEL_SEQUENCE. It keeps a downloaded cosign or jq for
 # the caller's next verify: run verify_lib_cleanup when done (a `trap … EXIT` also covers a refusal).
+# jq definitions for release tags: `tag` accepts null or a vX.Y.Z[-pre] string, and vlt($x; $y) is SemVer
+# 2.0.0 precedence (numeric parts compare as numbers; a pre-release sorts below its release; within
+# pre-releases, numeric identifiers sort below alphanumeric ones). Prepend to a jq program.
+# shellcheck disable=SC2016  # $a/$b/$x/$y/$d are jq variables, deliberately single-quoted (not shell)
+AUSPEX_JQ_SEMVER='
+  def tag: . == null or (type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"));
+  def parts: capture("^v(?<core>[0-9]+\\.[0-9]+\\.[0-9]+)(-(?<pre>.+))?$")
+    | {core: (.core | split(".") | map(tonumber)), pre: (if .pre then .pre | split(".") else [] end)};
+  def num: test("^[0-9]+$");
+  def idlt($a; $b):
+    if ($a | num) and ($b | num) then ($a | tonumber) < ($b | tonumber)
+    elif ($a | num) or ($b | num) then ($a | num)
+    else $a < $b end;
+  def prelt($a; $b):
+    if $a == $b or $a == [] then false
+    elif $b == [] then true
+    else [range(0; [($a | length), ($b | length)] | min) | select($a[.] != $b[.])] as $d
+      | if $d == [] then ($a | length) < ($b | length) else idlt($a[$d[0]]; $b[$d[0]]) end
+    end;
+  def vlt($x; $y):
+    ($x | parts) as $a | ($y | parts) as $b
+    | if $a.core != $b.core then $a.core < $b.core else prelt($a.pre; $b.pre) end;
+'
+
 CHANNEL_SEQUENCE=""
 verify_channel_document() { # <doc> <bundle> [--min-sequence N]
   if [ "$#" -lt 2 ]; then
@@ -669,27 +694,7 @@ verify_channel_document() { # <doc> <bundle> [--min-sequence N]
     echo "${AUSPEX_VERIFY_LOG_PREFIX}: cosign FAILED to verify ${doc} against the pinned channel identity — refusing to trust it" >&2
     exit "$AUSPEX_VERIFY_EX_COSIGN"
   fi
-  # vlt is SemVer 2.0.0 precedence: numeric parts compare as numbers, and a pre-release sorts below its
-  # release; within pre-releases, numeric identifiers sort below alphanumeric ones and compare as numbers.
-  # shellcheck disable=SC2016  # $a/$b/$x/$y/$d are jq variables, deliberately single-quoted (not shell)
-  if ! "$JQ_BIN" -e '
-    def tag: . == null or (type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"));
-    def parts: capture("^v(?<core>[0-9]+\\.[0-9]+\\.[0-9]+)(-(?<pre>.+))?$")
-      | {core: (.core | split(".") | map(tonumber)), pre: (if .pre then .pre | split(".") else [] end)};
-    def num: test("^[0-9]+$");
-    def idlt($a; $b):
-      if ($a | num) and ($b | num) then ($a | tonumber) < ($b | tonumber)
-      elif ($a | num) or ($b | num) then ($a | num)
-      else $a < $b end;
-    def prelt($a; $b):
-      if $a == $b or $a == [] then false
-      elif $b == [] then true
-      else [range(0; [($a | length), ($b | length)] | min) | select($a[.] != $b[.])] as $d
-        | if $d == [] then ($a | length) < ($b | length) else idlt($a[$d[0]]; $b[$d[0]]) end
-      end;
-    def vlt($x; $y):
-      ($x | parts) as $a | ($y | parts) as $b
-      | if $a.core != $b.core then $a.core < $b.core else prelt($a.pre; $b.pre) end;
+  if ! "$JQ_BIN" -e "$AUSPEX_JQ_SEMVER"'
     .schema == 1
     and (.sequence | type == "number" and . >= 1 and . == floor and . < 9007199254740992)
     and (.latest | tag) and (.stable | tag) and (.minimum | tag)
@@ -708,10 +713,65 @@ verify_channel_document() { # <doc> <bundle> [--min-sequence N]
   echo "${AUSPEX_VERIFY_LOG_PREFIX}: channel document verified (sequence ${seq}, signed by the pinned channel identity)"
 }
 
-# For callers of verify_channel_document, which keeps the cosign or jq it downloaded.
+# Set CHANNEL_RELEASE to the tag release channel <channel> (latest or stable) names in <base>'s signed channel
+# document, refusing the targets auspex ADR 0066 §2 has every client refuse: none, a pre-release `stable`, or
+# one below `minimum`. The fourth, a target below the installed version, is the caller's: a one-shot install
+# has none to hold. Like verify_channel_document it keeps cosign and jq for the next verify.
+CHANNEL_RELEASE=""
+_CHANNEL_TMP=""
+resolve_channel_release() { # <base> <channel>
+  local url="${1%/}/releases/channels.json" channel="$2" decision
+  case "$channel" in
+    latest | stable) ;;
+    *)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the release channel must be latest or stable, not '${channel}'" >&2
+      exit "$AUSPEX_VERIFY_EX_USAGE"
+      ;;
+  esac
+  _CHANNEL_TMP="$(mktemp -d)"
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: resolving the ${channel} channel from ${url}"
+  if ! fetch "$url" "$_CHANNEL_TMP/channels.json" || ! fetch "${url}.cosign.bundle" "$_CHANNEL_TMP/channels.json.cosign.bundle"; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: could not fetch ${url}(.cosign.bundle) — pass --version <tag> to choose the release yourself" >&2
+    exit "$AUSPEX_VERIFY_EX_FETCH"
+  fi
+  verify_channel_document "$_CHANNEL_TMP/channels.json" "$_CHANNEL_TMP/channels.json.cosign.bundle"
+  # shellcheck disable=SC2016  # $channel/$t are jq variables, deliberately single-quoted (not shell)
+  decision="$("$JQ_BIN" -r --arg channel "$channel" "$AUSPEX_JQ_SEMVER"'
+    .[$channel] as $t
+    | if $t == null then "none"
+      elif $channel == "stable" and ($t | parts | .pre != []) then "prerelease \($t)"
+      elif .minimum != null and vlt($t; .minimum) then "below-minimum \($t)"
+      else "ok \($t)" end' "$_CHANNEL_TMP/channels.json" 2>/dev/null)" || decision=""
+  rm -rf "$_CHANNEL_TMP"
+  _CHANNEL_TMP=""
+  case "$decision" in
+    "ok "*) CHANNEL_RELEASE="${decision#ok }" ;;
+    none)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the ${channel} channel names no release — pass --version <tag> to choose one" >&2
+      exit "$AUSPEX_VERIFY_EX_CHANNEL_REFUSED"
+      ;;
+    "prerelease "*)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the stable channel names a pre-release (${decision#* }) — refusing it" >&2
+      exit "$AUSPEX_VERIFY_EX_CHANNEL_REFUSED"
+      ;;
+    "below-minimum "*)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the ${channel} channel names ${decision#* }, below the minimum — refusing it" >&2
+      exit "$AUSPEX_VERIFY_EX_CHANNEL_REFUSED"
+      ;;
+    *)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: could not read the ${channel} channel from the verified document — refusing" >&2
+      exit "$AUSPEX_VERIFY_EX_CHANNEL_INVALID"
+      ;;
+  esac
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: the ${channel} channel names ${CHANNEL_RELEASE}"
+}
+
+# For callers of verify_channel_document or resolve_channel_release, which keep the cosign or jq they downloaded.
 verify_lib_cleanup() {
   [ -z "$COSIGN_CLEANUP" ] || rm -f "$COSIGN_CLEANUP"
   [ -z "$JQ_CLEANUP" ] || rm -f "$JQ_CLEANUP"
+  [ -z "$_CHANNEL_TMP" ] || rm -rf "$_CHANNEL_TMP"
   COSIGN_CLEANUP=""
   JQ_CLEANUP=""
+  _CHANNEL_TMP=""
 }

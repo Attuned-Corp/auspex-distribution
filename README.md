@@ -37,18 +37,14 @@ curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/d
 ```
 
 Flags: `--version <tag>` (optional — when omitted, and no `--url`, `--manifest-digest` or `--digest`, the
-installer resolves the download host's `latest` pointer to a concrete tag, then verifies against it; pass
-`--version` to pin),
+installer installs the release `--channel` names; pass `--version` to pin), `--channel latest|stable` /
+`AUSPEX_CHANNEL` (default `latest` — see [Following a release channel](#following-a-release-channel)),
 `--base-url <url>` / `AUSPEX_BASE_URL` (**required** unless `--url` — your auspex distribution host,
 from your install instructions, or an internal mirror), `--verify cosign|checksum|none` (default `cosign`),
 `--manifest-digest <sha256>` (pin a whole release — see [Pinning by digest](#pinning-by-digest)),
 `--digest <sha256>` (pin one binary's bytes), `--bin-dir <dir>`, and
 `AUSPEX_COSIGN_BASE_URL` (mirror the pinned cosign CLI for air-gapped installs). Same verify tiers as the
 Feature.
-
-The `latest` pointer (`releases/latest/VERSION`) is **unsigned**. It only chooses which release to install;
-the signature check then proves that release is genuine, not that it is the newest. The installer accepts
-only a full release tag from it (`vX.Y.Z` or `vX.Y.Z-<pre>`). Pass `--version` to choose the release yourself.
 
 To pin the **exact bytes** of a release, pass its manifest digest, `--manifest-digest` /
 `-ManifestDigest`, with just the host. One pin covers every binary for every platform, and it needs no cosign.
@@ -83,6 +79,31 @@ is required from auspex 0.10.0 on: if it is missing or doesn't verify, the insta
 `auspex.exe`. A release before 0.10.0 installs without it. A `-ManifestDigest` pin installs it too. A
 `-Digest` pin names one file: for 0.10.0 and later, pin `auspexw.exe` too with `-CaptureDigest`, or put it
 beside `auspex.exe` yourself before running `auspex install`, which needs both.
+
+### Following a release channel
+
+Without `--version`, the installer reads the download host's signed release channel document,
+`releases/channels.json`, and installs the release a channel names. `--channel latest` (the default) follows
+each release as soon as it is published. `--channel stable` follows the release Span promotes after a soak
+period, so new installs skip releases that haven't finished it.
+
+```bash
+curl -fsSL https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.sh \
+  | bash -s -- --channel stable --base-url <your-auspex-distribution-host>
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-install.ps1))) -Channel stable -BaseUrl <your-auspex-distribution-host>
+```
+
+The installer checks the document's signature against a pinned channel identity, separate from the one that
+signs releases, and then verifies the release it names as usual. It refuses a channel that names no release,
+a pre-release on `stable`, and a release below the document's `minimum`. `--channel` can't be combined with
+`--version`, `--url` or a digest pin.
+
+`--verify checksum` and `--verify none` run no cosign, so they can't check that signature. They accept only
+`latest`, which they read from the unsigned `releases/latest/VERSION` marker. The installer accepts only a full
+release tag from the marker (`vX.Y.Z` or `vX.Y.Z-<pre>`).
 
 ### Verifying the installer before you run it
 

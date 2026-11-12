@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# verify_channel_document (auspex ADR 0066) against real fixtures: auspex's first signed channel document, and
-# v0.11.0's release manifest as the wrong signer. A stub cosign drives the schema checks no real signature reaches.
+# verify_channel_document and resolve_channel_release (auspex ADR 0066) against real fixtures: auspex's first
+# signed channel document, and v0.11.0's release manifest as the wrong signer. A stub cosign drives the schema
+# checks and channel refusals no real signature reaches.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -189,6 +190,55 @@ for bad in \
   'not JSON|not json'; do
   expect "refused: ${bad%%|*}" 18 stubbed verify_channel_document "$(doc_json bad "${bad#*|}")" "$DOC_BUNDLE"
 done
+
+# resolve_channel_release fetches the document; serve it from <dir> instead. Runs after expect sources the
+# library, so this fetch replaces the library's.
+from_dir() { # <dir> <cmd…>
+  local dir="$1"
+  shift
+  # shellcheck disable=SC2317,SC2329 # replaces the library's fetch, which resolve_channel_release calls
+  fetch() { [ -f "${dir}/${1##*/}" ] && cp "${dir}/${1##*/}" "$2"; }
+  "$@"
+}
+
+release_is() { # <want> <channel>
+  resolve_channel_release https://cdn.test "$2" >/dev/null || return 1
+  # shellcheck disable=SC2031 # runs inside expect's subshell, after the resolve sets it
+  [ "$CHANNEL_RELEASE" = "$1" ]
+}
+
+channel_dir() { # <name> <json|-> — a served document (- for the real one) beside the real bundle; prints the dir.
+  mkdir -p "$WORK/$1"
+  if [ "$2" = - ]; then cp "$DOC" "$WORK/$1/channels.json"; else printf '%s\n' "$2" >"$WORK/$1/channels.json"; fi
+  cp "$DOC_BUNDLE" "$WORK/$1/channels.json.cosign.bundle"
+  printf '%s' "$WORK/$1"
+}
+
+echo "==> resolve_channel_release"
+REAL_DIR="$(channel_dir real -)"
+expect "the signed document's stable channel is v0.11.0" 0 from_dir "$REAL_DIR" release_is v0.11.0 stable
+expect "the signed document's latest channel is v0.11.0" 0 from_dir "$REAL_DIR" release_is v0.11.0 latest
+expect "a tampered document fails" 13 from_dir "$(channel_dir tampered "$(cat "$WORK/tampered.json")")" \
+  resolve_channel_release https://cdn.test stable
+rm "$WORK/tampered/channels.json.cosign.bundle"
+expect "a missing bundle fails as unfetched" 11 from_dir "$WORK/tampered" resolve_channel_release https://cdn.test stable
+expect "an unknown channel is a usage error" 2 from_dir "$REAL_DIR" resolve_channel_release https://cdn.test beta
+expect "a pre-release latest resolves" 0 stubbed from_dir \
+  "$(channel_dir rc-latest '{"schema":1,"sequence":7,"latest":"v0.12.0-rc.1","stable":"v0.11.0","minimum":null}')" \
+  release_is v0.12.0-rc.1 latest
+for refused in \
+  'a stable that names no release|stable|{"schema":1,"sequence":7,"latest":"v0.11.0","stable":null,"minimum":null}' \
+  'a latest that names no release|latest|{"schema":1,"sequence":7,"latest":null,"stable":"v0.11.0","minimum":null}' \
+  'a pre-release stable|stable|{"schema":1,"sequence":7,"latest":"v0.12.0-rc.1","stable":"v0.12.0-rc.1","minimum":null}' \
+  'a latest below the minimum|latest|{"schema":1,"sequence":7,"latest":"v0.10.0","stable":"v0.11.0","minimum":"v0.11.0"}' \
+  'a pre-release latest below its release minimum|latest|{"schema":1,"sequence":7,"latest":"v0.11.0-rc.1","stable":"v0.11.0","minimum":"v0.11.0"}'; do
+  rest="${refused#*|}"
+  expect "refused: ${refused%%|*}" 20 stubbed from_dir "$(channel_dir refused "${rest#*|}")" \
+    resolve_channel_release https://cdn.test "${rest%%|*}"
+done
+expect "a schema-2 document is refused as malformed" 18 stubbed from_dir \
+  "$(channel_dir schema2 '{"schema":2,"sequence":7,"latest":"v0.11.0","stable":"v0.11.0","minimum":null}')" \
+  resolve_channel_release https://cdn.test latest
 
 echo ""
 echo "channel-verify-test: ${pass} passed, ${fail} failed"

@@ -3,9 +3,9 @@
   auspex Windows installer (irm | iex) - fetch + fail-closed verify + place on PATH.
 
 .DESCRIPTION
-  TEMPLATE: the trust material (identity regex, OIDC issuer, cosign version + windows digest, and the
-  embedded Sigstore trusted_root.json) is INJECTED from src/span-auspex/verify-lib.sh by bootstrap/assemble.sh
-  - verify-lib.sh stays the single source of truth (SSOT) for the pins; this file is not runnable until
+  TEMPLATE: the trust material (release + channel identity regexes, OIDC issuer, cosign version + windows
+  digest, and the embedded Sigstore trusted_root.json) is INJECTED from src/span-auspex/verify-lib.sh by
+  bootstrap/assemble.sh - verify-lib.sh stays the single source of truth (SSOT) for the pins; this file is not runnable until
   assembled into dist/auspex-install.ps1. PowerShell cannot share the bash verify recipe, so this is the
   Windows-native equivalent of the bash recipe's resolve_binary_digest / fetch_blob_by_digest / verify_sha256 (cross-language duplication is unavoidable;
   the reconcile guard checks verify-lib.sh, the SSOT the assembler injects from).
@@ -22,6 +22,7 @@
 [CmdletBinding()]
 param(
   [string]$Version = $env:AUSPEX_VERSION,
+  [string]$Channel = $env:AUSPEX_CHANNEL,   # latest (default) | stable: the release to install when no -Version
   [ValidateSet('cosign', 'checksum', 'none')]
   [string]$Verify = $(if ($env:AUSPEX_VERIFY) { $env:AUSPEX_VERIFY } else { 'cosign' }),
   [string]$BaseUrl = $env:AUSPEX_BASE_URL,   # REQUIRED unless -Url: no baked default (host-agnostic public repo)
@@ -39,6 +40,7 @@ Set-StrictMode -Version Latest
 
 # --- trust material (INJECTED from verify-lib.sh by assemble.sh) -----------------------------------------
 $CosignIdentityRe = '@@AUSPEX_IDENTITY_RE@@'
+$CosignChannelIdentityRe = '@@AUSPEX_CHANNEL_IDENTITY_RE@@'
 $CosignOidcIssuer = '@@AUSPEX_OIDC_ISSUER@@'
 $CosignVersion    = '@@AUSPEX_COSIGN_VERSION@@'
 $CosignWinSha256  = '@@AUSPEX_COSIGN_WINDOWS_AMD64_SHA@@'
@@ -101,6 +103,7 @@ function Verify-Checksum([string]$file, [string]$u) {
 $script:CosignBin = $null
 $script:PinPrinted = $false # Resolve-BinaryDigest runs once per binary; the manifest pin prints once
 function Ensure-Cosign {
+  if ($script:CosignBin) { return } # on PATH, or downloaded and hash-checked earlier this run
   $existing = Get-Command cosign -ErrorAction SilentlyContinue
   if ($existing) { $script:CosignBin = $existing.Source; return }
   $arch = $env:PROCESSOR_ARCHITECTURE
@@ -260,6 +263,108 @@ function Get-PinnedManifest([string]$base, [string]$digest) {
   return $json
 }
 
+$ReleaseTagRe = '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+
+# Test-TagBelow reports whether release tag $x sorts below $y by SemVer 2.0.0 precedence, as verify-lib.sh's vlt:
+# numeric parts compare as numbers, a pre-release sorts below its release, and within pre-releases numeric
+# identifiers sort below alphanumeric ones.
+function Test-TagBelow([string]$x, [string]$y) {
+  $a = Split-ReleaseTag $x
+  $b = Split-ReleaseTag $y
+  for ($i = 0; $i -lt 3; $i++) {
+    if ($a.Core[$i] -ne $b.Core[$i]) { return $a.Core[$i] -lt $b.Core[$i] }
+  }
+  if (Test-SameIds $a.Pre $b.Pre) { return $false }
+  if ($a.Pre.Count -eq 0) { return $false }
+  if ($b.Pre.Count -eq 0) { return $true }
+  $n = [Math]::Min($a.Pre.Count, $b.Pre.Count)
+  for ($i = 0; $i -lt $n; $i++) {
+    $p = $a.Pre[$i]; $q = $b.Pre[$i]
+    if ($p -ceq $q) { continue }
+    $pn = $p -match '^[0-9]+$'; $qn = $q -match '^[0-9]+$'
+    if ($pn -and $qn) { return [decimal]$p -lt [decimal]$q }
+    if ($pn -or $qn) { return $pn }
+    return [string]::CompareOrdinal($p, $q) -lt 0
+  }
+  return $a.Pre.Count -lt $b.Pre.Count
+}
+
+function Split-ReleaseTag([string]$tag) {
+  $null = $tag -cmatch '^v([0-9]+)\.([0-9]+)\.([0-9]+)(-(.+))?$'
+  $pre = @()
+  if ($Matches[5]) { $pre = @($Matches[5] -split '\.') }
+  return @{ Core = @([decimal]$Matches[1], [decimal]$Matches[2], [decimal]$Matches[3]); Pre = $pre }
+}
+
+function Test-SameIds([string[]]$p, [string[]]$q) {
+  if ($p.Count -ne $q.Count) { return $false }
+  for ($i = 0; $i -lt $p.Count; $i++) { if ($p[$i] -cne $q[$i]) { return $false } }
+  return $true
+}
+
+# Get-ChannelField returns a channel document field, or $null when it is absent (StrictMode throws on a missing
+# property).
+function Get-ChannelField($doc, [string]$name) {
+  if ($doc.PSObject.Properties[$name]) { return $doc.$name }
+  return $null
+}
+
+# Test-ChannelTag accepts $null or a release tag string, as verify-lib.sh's jq `tag`.
+function Test-ChannelTag($v) {
+  return ($null -eq $v) -or (($v -is [string]) -and ($v -cmatch $ReleaseTagRe))
+}
+
+# Resolve-ChannelRelease returns the tag release channel $Channel names in $base's signed channel document (auspex
+# ADR 0066), the Windows-native equivalent of verify-lib.sh's resolve_channel_release. It verifies the document
+# against the pinned CHANNEL identity, applies the reader's schema checks, then refuses what every client must: a
+# channel naming no release, a pre-release stable, or one below the minimum.
+function Resolve-ChannelRelease([string]$base, [string]$channel) {
+  $u = "$($base.TrimEnd('/'))/releases/channels.json"
+  Write-Host "auspex install: resolving the $channel channel from $u"
+  Ensure-Cosign
+  $rootPath = Write-TrustedRoot
+  $doc = New-TemporaryFile
+  $bundle = New-TemporaryFile
+  try {
+    Fetch $u $doc.FullName
+    Fetch "$u.cosign.bundle" $bundle.FullName
+    & $script:CosignBin verify-blob `
+      --bundle $bundle.FullName `
+      --trusted-root $rootPath `
+      --certificate-identity-regexp $CosignChannelIdentityRe `
+      --certificate-oidc-issuer $CosignOidcIssuer `
+      $doc.FullName *> $null
+    if ($LASTEXITCODE -ne 0) {
+      Fail "cosign FAILED to verify $u against the pinned channel identity - refusing to trust it" 13
+    }
+    $json = $null
+    try { $json = Get-Content -Raw -LiteralPath $doc.FullName | ConvertFrom-Json } catch { }
+  } finally {
+    Remove-Item -LiteralPath $doc.FullName, $bundle.FullName, $rootPath -Force -ErrorAction SilentlyContinue
+  }
+  $valid = $json -is [System.Management.Automation.PSCustomObject]
+  if ($valid) {
+    $seq = Get-ChannelField $json 'sequence'
+    $latest = Get-ChannelField $json 'latest'
+    $stable = Get-ChannelField $json 'stable'
+    $minimum = Get-ChannelField $json 'minimum'
+    $schema = Get-ChannelField $json 'schema'
+    # Whole numbers parse as [int] under Windows PowerShell 5.1 and [long] under pwsh 7.
+    $valid = (($schema -is [int]) -or ($schema -is [long])) -and ($schema -eq 1) -and
+      (($seq -is [int]) -or ($seq -is [long])) -and ($seq -ge 1) -and ($seq -lt 9007199254740992) -and
+      (Test-ChannelTag $latest) -and (Test-ChannelTag $stable) -and (Test-ChannelTag $minimum) -and
+      (($null -eq $minimum) -or (($null -ne $stable) -and -not (Test-TagBelow $stable $minimum)))
+  }
+  if (-not $valid) { Fail "$u is signed but isn't a schema-1 channel document - refusing to trust it" 18 }
+  Write-Host "auspex install: channel document verified (sequence $seq, signed by the pinned channel identity)"
+  $target = Get-ChannelField $json $channel
+  if ($null -eq $target) { Fail "the $channel channel names no release - pass -Version <tag> to choose one" 20 }
+  if ($channel -eq 'stable' -and $target.Contains('-')) { Fail "the stable channel names a pre-release ($target) - refusing it" 20 }
+  if ($null -ne $minimum -and (Test-TagBelow $target $minimum)) { Fail "the $channel channel names $target, below the minimum - refusing it" 20 }
+  Write-Host "auspex install: the $channel channel names $target"
+  return $target
+}
+
 function Get-WindowsArch {
   switch ($env:PROCESSOR_ARCHITECTURE) {
     'AMD64' { return 'amd64' }
@@ -269,6 +374,14 @@ function Get-WindowsArch {
 }
 
 # --- derive source ---------------------------------------------------------------------------------------
+if ($Channel -and @('latest', 'stable') -notcontains $Channel) { Fail "-Channel must be latest or stable (got '$Channel')" 2 }
+if ($Channel -and ($Version -or $Url -or $Digest -or $ManifestDigest)) {
+  Fail "-Channel picks the release, so it can't be combined with -Version, -Url, -Digest or -ManifestDigest" 2
+}
+$Channel = if ($Channel) { $Channel.ToLower() } else { 'latest' }
+if ($Channel -eq 'stable' -and $Verify -ne 'cosign') {
+  Fail "-Channel stable reads the signed channel document, which needs -Verify cosign - pass -Version <tag> instead" 2
+}
 if ($ManifestDigest -and ($Digest -or $CaptureDigest)) {
   Fail "-ManifestDigest pins every binary already - drop -Digest/-CaptureDigest" 2
 }
@@ -293,10 +406,14 @@ if ($Digest -or $ManifestDigest) {
 }
 elseif (-not $Url) {
   if (-not $BaseUrl) { Fail "no artifact source - pass -BaseUrl <url> (your auspex distribution host; see your install instructions) or -Url <full-url>, or set AUSPEX_BASE_URL" 2 }
-  if (-not $Version) {
-    # No -Version: resolve the CDN's canonical `latest` pointer to a CONCRETE tag, then verify against it
-    # (keeps verify: cosign tag-bound - a bare "latest" would fail the manifest version-annotation check).
-    # Pass -Version <tag> (or -Digest) to pin instead.
+  if (-not $Version -and $Verify -eq 'cosign') {
+    # No -Version: install the release the channel names in the host's signed channel document (auspex ADR
+    # 0066). The tag stays concrete, so verify: cosign still binds the manifest to it.
+    $Version = Resolve-ChannelRelease $BaseUrl $Channel
+  }
+  elseif (-not $Version) {
+    # checksum/none run no cosign, so they can't check the channel document's signature. They follow `latest`
+    # through the CDN's unsigned `releases/latest/VERSION` marker, resolved to a CONCRETE tag.
     $verUrl = "$($BaseUrl.TrimEnd('/'))/releases/latest/VERSION"
     Write-Host "auspex install: no -Version given - resolving latest from $verUrl"
     $verTmp = New-TemporaryFile
@@ -304,7 +421,7 @@ elseif (-not $Url) {
     $Version = ((Get-Content -LiteralPath $verTmp.FullName -First 1) + '').Trim()
     Remove-Item -LiteralPath $verTmp.FullName -Force -ErrorAction SilentlyContinue
     # The marker is unsigned: accept only a full release tag (the shape the release identity signs, no room for a path).
-    if (-not $Version -or $Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { Fail "resolved 'latest' is not a release tag ('$Version') - pass -Version <tag> or -Digest" 11 }
+    if (-not $Version -or $Version -cnotmatch $ReleaseTagRe) { Fail "resolved 'latest' is not a release tag ('$Version') - pass -Version <tag> or -Digest" 11 }
     Write-Host "auspex install: resolved latest -> $Version"
   }
   $Url = "$($BaseUrl.TrimEnd('/'))/releases/$Version/windows/$(Get-WindowsArch)/auspex.exe"
