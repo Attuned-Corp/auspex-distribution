@@ -35,6 +35,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-11-12]
+
+Published components:
+
+- **Install surface** — `installers-v0.1.5` (GitHub Release; adds `--channel`, and the macOS scheduled
+  update script and its loader)
+
 ### Added
 
 - **Installers** · **Follow the `stable` channel** — `--channel stable` (macOS / Linux installer), `-Channel
