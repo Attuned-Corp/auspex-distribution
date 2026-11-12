@@ -35,6 +35,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Installers** · **The scheduled update loader caches the script** — `auspex-scheduled-update-loader.sh`
+  keeps the script it checked in its root-only state directory and runs that copy while it matches the
+  loader's pinned SHA-256, so a Mac downloads the script from GitHub once per loader, not on every run. Paste
+  this release's loader to get it. `mdm/README.md` now suggests running it every 12 hours.
+
 ## [2026-11-12]
 
 Published components:

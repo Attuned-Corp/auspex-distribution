@@ -180,6 +180,7 @@ sequence_is() { [ "$(cat "$CASE/state/sequence" 2>/dev/null)" = "$1" ]; }
 tidy() { [ ! -e "$CASE/state/staging" ] && [ ! -e "$CASE/state/tmp" ] && [ ! -e "$CASE/state/lock" ]; }
 failed_with() { last_line_says "failed with exit $1 (exit codes: mdm/README.md)"; }
 cosign_is_pinned() { cmp -s "$CASE/state/bin/cosign" "$WORK/tools/cosign"; }
+cached_is_pinned() { cmp -s "$CASE/state/scheduled-update.sh" "$BUILT"; }
 installed_verified_pkg() { [ "$(cat "$CASE/installer.log")" = "-pkg $CASE/state/staging/auspex.pkg -target /" ]; }
 
 echo "==> outcomes"
@@ -347,13 +348,13 @@ holds "the released loader pins the released script by SHA-256" grep -qx "SCRIPT
 holds "the released loader downloads from its own release" \
   grep -qx 'SCRIPT_URL="https://github.com/Attuned-Corp/auspex-distribution/releases/download/test-release/auspex-scheduled-update.sh"' "$LOADER_SRC"
 holds "the released loader downloads over https only" grep -qF -- "--proto '=https' --proto-redir '=https'" "$LOADER_SRC"
-holds "the released loader is short enough to read" [ "$(wc -l <"$LOADER_SRC")" -le 40 ]
+holds "the released loader is short enough to read" [ "$(wc -l <"$LOADER_SRC")" -le 45 ]
 
 VIA_LOADER=1
 loader_for stable
 new_case
-expect "the loader runs the pinned script with its own settings" 0 -- \
-  'installed_is 0.11.0' 'last_line_says "installed auspex v0.11.0 from stable"' tidy
+expect "the loader runs the pinned script with its own settings, and caches it" 0 -- \
+  'installed_is 0.11.0' 'last_line_says "installed auspex v0.11.0 from stable"' tidy cached_is_pinned
 
 loader_for latest
 new_case
@@ -368,12 +369,27 @@ loader_for stable
 printf ' ' >>"$WEBROOT/loader/auspex-scheduled-update.sh"
 new_case
 expect "a script that does not match the pin is never run" 12 -- not_installed \
-  'said "running nothing"' 'failed_with 12' '[ ! -e "$CASE/state/sequence" ]'
+  'said "running nothing"' 'failed_with 12' '[ ! -e "$CASE/state/sequence" ]' '[ ! -e "$CASE/state/scheduled-update.sh" ]'
 mv "$WEBROOT/loader/auspex-scheduled-update.sh" "$WORK/held.sh"
 new_case
 expect "a script that cannot be downloaded is never run" 11 -- not_installed 'failed_with 11' \
   '[ ! -e "$CASE/state/sequence" ]'
+new_case
+cp "$BUILT" "$CASE/state/scheduled-update.sh"
+expect "a cached script that matches the pin runs without a download" 0 -- 'installed_is 0.11.0'
+new_case
+printf 'echo planted\n' >"$CASE/state/scheduled-update.sh"
+expect "a cached script that does not match the pin is never run" 11 -- not_installed '! said planted' \
+  'failed_with 11'
+new_case
+chmod 0755 "$CASE/state"
+cp "$BUILT" "$CASE/state/scheduled-update.sh"
+expect "a cache in a state directory others can read is not used" 11 -- not_installed 'failed_with 11'
 cp "$BUILT" "$WEBROOT/loader/auspex-scheduled-update.sh"
+new_case
+printf 'echo stale\n' >"$CASE/state/scheduled-update.sh"
+expect "a stale cached script is replaced by the pinned download" 0 -- 'installed_is 0.11.0' '! said stale' \
+  cached_is_pinned
 VIA_LOADER=""
 
 echo "==> decisions"

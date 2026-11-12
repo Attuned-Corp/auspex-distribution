@@ -77,7 +77,7 @@ Whatever release the channel names installs with no per-release approval. To app
 gate above instead. A forged channel document can't install a build auspex didn't sign; at worst it holds a
 Mac back.
 
-Paste the loader, `auspex-scheduled-update-loader.sh` from a release (about 30 lines), into the MDM's script
+Paste the loader, `auspex-scheduled-update-loader.sh` from a release (about 40 lines), into the MDM's script
 field, and set the two lines at its top:
 
 ```bash
@@ -85,17 +85,21 @@ AUSPEX_BASE_URL=""      # required: your auspex download host (https://...), fro
 AUSPEX_CHANNEL="stable" # stable (the default) or latest
 ```
 
-Each run, the loader downloads `auspex-scheduled-update.sh` from the same release on GitHub, checks it against
-the SHA-256 the release wrote into the loader, and runs it with those two settings. A download that doesn't
-match runs nothing, so a damaged paste or a tampered download fails closed. To update the script, paste a
-newer release's loader. You can check the loader you downloaded against its `.cosign.bundle`, as for the
-other release files.
+Each run, the loader checks `auspex-scheduled-update.sh` against the SHA-256 the release wrote into the
+loader, and runs it with those two settings. It downloads the script from the same release on GitHub only
+when its cached copy in the state directory is missing or doesn't match, so GitHub is fetched about once per
+Mac for each loader you paste. A script that doesn't match runs nothing, so a damaged paste or a tampered
+download fails closed. To update the script, paste a newer release's loader. You can check the loader you
+downloaded against its `.cosign.bundle`, as for the other release files.
+
+Every 12 hours is often enough. A promotion to `stable` comes after a soak period, so it doesn't need to reach
+a Mac within the hour, and a repeating interval still runs on a Mac that was asleep at a fixed time of day.
 
 It keeps its state in `/Library/Application Support/auspex-update/`, a root-owned 0700 directory: the pinned
-cosign, downloaded once and hash-checked before each use, and the last channel sequence it accepted. auspex's
-managed uninstall script removes it. Each run's last line of output is its result. An MDM may not show exit
-codes (Mosyle shows only the output), so a failed run's last line names its code, for example
-`auspex update: failed with exit 13 (exit codes: mdm/README.md)`.
+cosign and the loader's copy of the script, each hash-checked before every use, and the last channel sequence
+it accepted. auspex's managed uninstall script removes it. Each run's last line of output is its result. An
+MDM may not show exit codes (Mosyle shows only the output), so a failed run's last line names its code, for
+example `auspex update: failed with exit 13 (exit codes: mdm/README.md)`.
 
 | Exit | Meaning |
 |---|---|
