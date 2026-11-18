@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
-# PowerShell installer contract: the shipped scripts are ASCII and parse, the auspexw.exe version gate holds, and
-# -ManifestDigest and -Channel install or refuse as they should, run against a local fixture tree so nothing is
-# downloaded.
+# PowerShell installer contract: the shipped scripts are ASCII and parse, the auspexw.exe version gate holds,
+# -ManifestDigest and -Channel install or refuse as they should, and verify-gate.ps1 passes or refuses an installer,
+# run against a local fixture tree so nothing is downloaded.
 # Run: make ps1-test (needs pwsh; preinstalled on the GitHub-hosted ubuntu image).
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot '../bootstrap/bootstrap.ps1'
@@ -77,8 +77,9 @@ foreach ($c in @(
 
 # ---- -ManifestDigest, end to end ----------------------------------------------------------------------
 # Runs the real bootstrap.ps1 in a child of this same shell with only Fetch (serves https://cdn.test/ from a
-# fixture tree) and Ensure-Cosign (a recording stub) swapped, so the flag checks and order are real. The stub
-# passes, unless $cosignFail holds text its arguments contain.
+# fixture tree) swapped, so the flag checks and order are real. cosign is a native stub first on PATH, which
+# Ensure-Cosign prefers. Like cosign, it reports on stderr even when it passes. It logs its arguments and passes,
+# unless $cosignFail holds text they contain.
 foreach ($n in 'AUSPEX_VERSION', 'AUSPEX_CHANNEL', 'AUSPEX_VERIFY', 'AUSPEX_BASE_URL', 'AUSPEX_BINARY_URL', 'AUSPEX_DIGEST',
   'AUSPEX_CAPTURE_DIGEST', 'AUSPEX_MANIFEST_DIGEST', 'AUSPEX_BIN_DIR', 'AUSPEX_COSIGN_BASE_URL') {
   Remove-Item "Env:$n" -ErrorAction SilentlyContinue
@@ -99,19 +100,11 @@ function Fetch([string]`$u, [string]`$out) {
   Copy-Item -LiteralPath `$src -Destination `$out -Force
 }
 "@
-  'Ensure-Cosign' = @"
-function Ensure-Cosign { `$script:CosignBin = 'Invoke-StubCosign' }
-function Invoke-StubCosign {
-  Add-Content -LiteralPath '$cosignLog' -Value (`$args -join ' ')
-  `$global:LASTEXITCODE = 0
-  if ((Test-Path -LiteralPath '$cosignFail') -and (`$args -join ' ').Contains((Get-Content -Raw -LiteralPath '$cosignFail').Trim())) { `$global:LASTEXITCODE = 1 }
-}
-"@
 }
 $text = [IO.File]::ReadAllText($script)
 $defs = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $swaps.ContainsKey($n.Name) }, $true) |
     Sort-Object { $_.Extent.StartOffset } -Descending)
-if ($defs.Count -ne 2) { Write-Host 'FAIL  bootstrap.ps1 must define Fetch and Ensure-Cosign once each'; exit 1 }
+if ($defs.Count -ne 1) { Write-Host 'FAIL  bootstrap.ps1 must define Fetch once'; exit 1 }
 foreach ($d in $defs) {
   $text = $text.Substring(0, $d.Extent.StartOffset) + $swaps[$d.Name] + $text.Substring($d.Extent.EndOffset)
 }
@@ -121,6 +114,25 @@ $text = $text -replace '@@AUSPEX_[A-Z0-9_]+@@', 'test'
 $installer = Join-Path $work 'install.ps1'
 [IO.File]::WriteAllText($installer, $text, [Text.Encoding]::ASCII)
 $shell = (Get-Process -Id $PID).Path
+
+$stub = Join-Path $work 'stub'
+New-Item -ItemType Directory -Force -Path $stub | Out-Null
+[IO.File]::WriteAllText((Join-Path $stub 'cosign-stub.ps1'), @'
+$a = $args -join ' '
+[IO.File]::AppendAllText($env:STUB_COSIGN_LOG, "$a`n")
+[Console]::Error.WriteLine('Verified OK')
+if ((Test-Path -LiteralPath $env:STUB_COSIGN_FAIL) -and $a.Contains([IO.File]::ReadAllText($env:STUB_COSIGN_FAIL).Trim())) { exit 1 }
+exit 0
+'@)
+if (($PSVersionTable.PSEdition -eq 'Desktop') -or $IsWindows) {
+  [IO.File]::WriteAllText((Join-Path $stub 'cosign.cmd'), "@`"$shell`" -NoProfile -ExecutionPolicy Bypass -File `"$stub\cosign-stub.ps1`" %*`r`n")
+} else {
+  [IO.File]::WriteAllText((Join-Path $stub 'cosign'), "#!/bin/sh`nexec `"$shell`" -NoProfile -File `"$stub/cosign-stub.ps1`" `"`$@`"`n")
+  chmod 0755 (Join-Path $stub 'cosign')
+}
+$env:PATH = "$stub$([IO.Path]::PathSeparator)$env:PATH"
+$env:STUB_COSIGN_LOG = $cosignLog
+$env:STUB_COSIGN_FAIL = $cosignFail
 
 function Write-Ascii([string]$path, [string]$content) {
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
@@ -274,6 +286,27 @@ Write-Ascii (Join-Path $rel 'auspex.exe.sha256') "$exeSum  auspex.exe"
 Write-Ascii (Join-Path $rel 'auspexw.exe.sha256') "$wSum  auspexw.exe"
 Write-Ascii (Join-Path $cdn 'releases/latest/VERSION') 'v0.13.0'
 $null = Test-Install '-Verify checksum follows the latest marker' @('-BaseUrl', $base, '-Verify', 'checksum') 'both' 'resolved latest -> v0.13.0'
+
+# ---- verify-gate.ps1 over the same cosign stub -----------------------------------------------------------
+$gateText = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../mdm/verify-gate.ps1'))
+$gate = Join-Path $work 'gate.ps1'
+[IO.File]::WriteAllText($gate, ($gateText.Replace('@@AUSPEX_TRUSTED_ROOT_B64@@', 'e30=') -replace '@@AUSPEX_[A-Z0-9_]+@@', 'test'), [Text.Encoding]::ASCII)
+Write-Ascii "$exeFile.cosign.bundle" 'dummy-bundle'
+function Test-Gate([string]$what, [bool]$pass, [string]$expect) {
+  $ErrorActionPreference = 'Continue'
+  $out = & $shell -NoProfile -ExecutionPolicy Bypass -File $gate -Installer $exeFile 2>&1 | Out-String
+  $rc = $LASTEXITCODE
+  $problem = ''
+  if ($pass -and $rc -ne 0) { $problem = "expected success, rc=$rc" }
+  elseif (-not $pass -and $rc -eq 0) { $problem = 'expected a refusal' }
+  elseif (-not (Get-Flat $out).Contains((Get-Flat $expect))) { $problem = "the output lacks '$expect'" }
+  if ($problem) { Write-Host "FAIL  $what - $problem"; Write-Host ($out -replace '(?m)^', '        '); $script:failures++ }
+  else { Write-Host "ok    $what" }
+}
+Remove-Item -LiteralPath $cosignFail -Force -ErrorAction SilentlyContinue
+Test-Gate 'verify-gate passes an installer cosign verifies' $true 'VERIFIED - safe to install'
+Write-Ascii $cosignFail 'auspex.exe'
+Test-Gate 'verify-gate refuses an installer cosign rejects' $false 'cosign FAILED to verify'
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($failures) { Write-Host "$failures failure(s)"; exit 1 }
