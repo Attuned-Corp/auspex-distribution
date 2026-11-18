@@ -205,14 +205,14 @@ Copy-Item $update $served
 
 # The released loader with the fixture host and $channel in its settings lines, downloading the stubbed script
 # from the fixture (loopback http in place of its https-only check).
-$loader = Join-Path $work 'loader.ps1'
+$loaderFile = Join-Path $work 'loader.ps1'
 function Set-Loader([string]$channel) {
   $l = [IO.File]::ReadAllText($releasedLoader)
   $l = $l.Replace("`$AuspexBaseUrl = ''  ", "`$AuspexBaseUrl = '$base'").Replace("`$AuspexChannel = 'stable'", "`$AuspexChannel = '$channel'")
   $l = $l -replace "(?m)^\`$ScriptUrl = .*$", "`$ScriptUrl = '$base/loader/auspex-scheduled-update.ps1'"
   $l = $l -replace "(?m)^\`$ScriptSha256 = .*$", "`$ScriptSha256 = '$(Get-Sha $update)'"
   $l = $l.Replace("-notmatch '^https://'", "-notmatch '^http://127\.0\.0\.1:'")
-  [IO.File]::WriteAllText($loader, $l, [Text.Encoding]::ASCII)
+  [IO.File]::WriteAllText($loaderFile, $l, [Text.Encoding]::ASCII)
 }
 
 $script:Case = ''
@@ -242,7 +242,7 @@ function Expect([string]$label, [int]$want, [hashtable]$envs = @{}, [scriptblock
     $saved[$k] = [Environment]::GetEnvironmentVariable($k)
     [Environment]::SetEnvironmentVariable($k, $vars[$k])
   }
-  $file = if ($Loader) { $loader } else { $update }
+  $file = if ($Loader) { $loaderFile } else { $update }
   $ErrorActionPreference = 'Continue'
   $script:Out = & $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $file 2>&1 | Out-String
   $rc = $LASTEXITCODE
