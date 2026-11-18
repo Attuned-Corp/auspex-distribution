@@ -19,6 +19,7 @@ and the `curl | bash` bootstrap use — so there is a single verifier to maintai
 | `mdm/verify-gate.sh` | macOS / any bash runner | `.pkg` + its `.cosign.bundle` | the mechanically-tested core (`tests/install-verify-test.sh`) |
 | `mdm/verify-gate.ps1` | Windows / Intune | `.msi` + its `.cosign.bundle` | PowerShell-native mirror; trust material injected at assembly |
 | `mdm/scheduled-update.sh` | macOS | the channel document, then the `.pkg` + its `.cosign.bundle` | verifies **and installs** on a schedule, run by the pasted `mdm/scheduled-update-loader.sh`; see [below](#macos--keep-auspex-up-to-date-on-a-schedule) (`tests/scheduled-update-test.sh`) |
+| `mdm/scheduled-update.ps1` | Windows / Intune | the channel document, then the `.msi` + its `.cosign.bundle` | the Windows twin, run by the pasted `mdm/scheduled-update-loader.ps1`; see [below](#windows--keep-auspex-up-to-date-on-a-schedule) (`tests/scheduled-update-ps1-test.ps1`) |
 
 The two gates **verify only** — they do **not** run the native installer. The MDM recipe chains the install **after**
 a successful verify, so a non-zero exit **aborts the deploy** (fail-closed). Use the **self-contained
@@ -117,6 +118,73 @@ example `auspex update: failed with exit 13 (exit codes: mdm/README.md)`.
 | `22` | `installer` failed |
 | `23` | After the install, the package receipt doesn't name the release |
 
+## Windows — keep auspex up to date on a schedule
+
+`auspex-scheduled-update.ps1` is the Windows twin of the [macOS script](#macos--keep-auspex-up-to-date-on-a-schedule).
+It keeps a Windows device on a release channel without approving each release. An Intune Remediation runs it as
+SYSTEM on a schedule, through a short loader. Each run takes the same four steps as on macOS, with the `.msi`
+for the device's CPU (amd64 or arm64) in place of the `.pkg`, installed by `msiexec /qn`. Whatever release the
+channel names installs with no per-release approval.
+
+Paste the loader, `auspex-scheduled-update-loader.ps1` from a release (about 45 lines), and set the two lines
+at its top:
+
+```powershell
+$AuspexBaseUrl = ''       # required: your auspex download host (https://...), from your install instructions
+$AuspexChannel = 'stable' # stable (the default) or latest
+```
+
+The loader pins `auspex-scheduled-update.ps1` by SHA-256 and caches it, as the macOS loader does. It checks the
+hash on the bytes it runs, held in memory, so the script can't change between the check and the run.
+
+### Intune Remediation
+
+Remediations need each device's users to hold a Windows Enterprise E3 or E5, Education A3 or A5, or VDA license
+([Microsoft](https://learn.microsoft.com/en-us/intune/device-management/tools/deploy-remediations)). Deploy the
+identity script from the Intune guide first, so the first install picks up your organization's identity.
+
+In **Scripts and remediations**, create a script package with these settings:
+
+| Setting | Value |
+|---|---|
+| Detection script file | the loader, with your two settings |
+| Remediation script file | none: the loader does the work, and a detection-only package still runs on its schedule |
+| Run this script using the logged-on credentials | **No**, so it runs as SYSTEM |
+| Enforce script signature check | **No**: the loader isn't Authenticode-signed; its pinned SHA-256 checks the script |
+| Run script in 64-bit PowerShell | Yes (No works too) |
+| Assignment schedule | **Hourly**, repeating every 12 hours, for the reason given for macOS |
+
+Don't also assign the auspex line-of-business app as Required. Intune detects that app by its `.msi` product
+code, which changes with every release. Once the script upgrades a device, expect Intune to retry the older
+`.msi`, which refuses the downgrade and reports a failed install. The scheduled update does the first install
+itself.
+
+### Reading the result
+
+Intune counts only exit 1 as an issue, so every failed run exits 1 and the device shows **With issues**. The
+run's output is short, and its last line is the result, for example `auspex update: failed with code 13 (codes:
+mdm/README.md)`. The codes are the [macOS ones](#macos--keep-auspex-up-to-date-on-a-schedule), with these
+differences:
+
+| Code | On Windows |
+|---|---|
+| `1` | An unexpected error; the line before names it |
+| `16` | Also: not elevated, an unsupported CPU, or more than one auspex `.msi` installed |
+| `17` | Not used: PowerShell reads the channel document without jq |
+| `21` | The state folder isn't usable by SYSTEM and Administrators alone, or is a link |
+| `22` | `msiexec` failed; its log is `msiexec.log` in the state folder. Exit 3010 (restart wanted) counts as installed |
+| `23` | After the install, Windows Installer doesn't report the release |
+
+It keeps its state in `C:\ProgramData\auspex-update`, created so only SYSTEM and Administrators can use it. The
+script refuses a folder anyone else could have planted, so delete such a folder to start over. It holds the
+pinned cosign and the loader's copy of the script, each hash-checked before every use. It also holds the last
+channel sequence accepted, the tag the script last installed and the last `msiexec` log. auspex's managed
+uninstall script doesn't remove this folder yet, so delete it by hand when you decommission a device.
+
+The `.msi` drops a pre-release suffix from its version, so `v0.13.0-rc.1` installs as 0.13.0. The script
+remembers the tag it installed, so on `latest` it still moves that device on to `v0.13.0`. A release candidate
+installed some other way reads as its final release.
+
 ## Windows — Intune (Win32 / line-of-business wrapper)
 
 Wrap the `.msi` install so verify runs first and `msiexec` runs only on exit 0:
@@ -141,7 +209,9 @@ Start-Process msiexec.exe -ArgumentList '/i', "`"$Stage`"", '/qn', '/norestart' 
 
 > These integration recipes are **documented, not CI-tested against a live MDM**. What CI *does* test is the
 > gate's **fail-closed behavior + exit-code contract** over a tampered / identity-mismatched installer
-> (`tests/install-verify-test.sh`).
+> (`tests/install-verify-test.sh`). CI runs the Windows scheduled update end to end under Windows PowerShell
+> 5.1 with only `msiexec` stubbed (`tests/scheduled-update-ps1-test.ps1`); it hasn't yet run in a live
+> Intune tenant.
 
 ## Fail posture
 

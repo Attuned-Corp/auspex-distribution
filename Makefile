@@ -20,6 +20,14 @@ channel-verify-test:
 scheduled-update-test:
 	@./tests/scheduled-update-test.sh
 
+# MDM scheduled update contract on Windows (mdm/scheduled-update.ps1 and its loader). Anywhere: the decision
+# and channel document functions. On Windows, elevated: the assembled script and released loader end to end, with
+# real cosign and stubbed msiexec. Needs pwsh (or Windows PowerShell), and on Windows python and dist/ from
+# `RELEASE_TAG=test-release make assemble`.
+.PHONY: scheduled-update-ps1-test
+scheduled-update-ps1-test:
+	@pwsh -NoProfile -File tests/scheduled-update-ps1-test.ps1
+
 # PowerShell installer contract: the shipped .ps1 scripts are ASCII (Windows PowerShell 5.1 misreads BOM-less
 # UTF-8) and parse, and bootstrap.ps1's release-version gate that decides auspexw.exe compares versions
 # numerically (0.10.0 > 0.9.1) with pre-releases counting as their base version. Needs pwsh.
@@ -62,6 +70,7 @@ help:
 	@echo "  verify-test               installer + bootstrap download-verify contract (pure bash+HTTP; the PR gate)"
 	@echo "  channel-verify-test       release channel document verify contract (real cosign; ADR 0066)"
 	@echo "  scheduled-update-test     MDM scheduled update + loader contract (real cosign; ASSEMBLED=1 for the released script)"
+	@echo "  scheduled-update-ps1-test MDM scheduled update contract on Windows (portable cases anywhere; needs pwsh)"
 	@echo "  ps1-test                  PowerShell installers ASCII + parse, auspexw version gate (needs pwsh)"
 	@echo "  assemble                  build dist/auspex-install.sh|.ps1 from the shared recipe (Release assets)"
 	@echo "  shellcheck                lint all shell scripts"

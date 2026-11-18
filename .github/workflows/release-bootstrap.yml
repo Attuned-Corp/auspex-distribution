@@ -58,7 +58,7 @@ jobs:
 
       - name: Assemble installers from the shared recipe
         env:
-          RELEASE_TAG: ${{ inputs.tag }} # the scheduled update loader downloads its script from this release
+          RELEASE_TAG: ${{ inputs.tag }} # the scheduled update loaders download their scripts from this release
         run: make assemble
 
       # Pinned cosign, verified against its published SHA-256 before use (kept in lock-step with
@@ -82,6 +82,7 @@ jobs:
           cd dist
           assets=(auspex-install.sh auspex-install.ps1 auspex-verify-gate.sh auspex-verify-gate.ps1 \
                   auspex-scheduled-update.sh auspex-scheduled-update-loader.sh \
+                  auspex-scheduled-update.ps1 auspex-scheduled-update-loader.ps1 \
                   cursor-cloud-install.sh cursor-cloud-start.sh cursor-cloud-preflight.sh \
                   claude-cloud-install.sh claude-cloud-session-start.sh claude-cloud-preflight.sh)
           for f in "${assets[@]}"; do
@@ -111,6 +112,10 @@ jobs:
             dist/auspex-scheduled-update.sh.cosign.bundle \
             dist/auspex-scheduled-update-loader.sh \
             dist/auspex-scheduled-update-loader.sh.cosign.bundle \
+            dist/auspex-scheduled-update.ps1 \
+            dist/auspex-scheduled-update.ps1.cosign.bundle \
+            dist/auspex-scheduled-update-loader.ps1 \
+            dist/auspex-scheduled-update-loader.ps1.cosign.bundle \
             dist/cursor-cloud-install.sh \
             dist/cursor-cloud-install.sh.cosign.bundle \
             dist/cursor-cloud-start.sh \

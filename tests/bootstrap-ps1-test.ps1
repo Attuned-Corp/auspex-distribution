@@ -9,7 +9,7 @@ $script = Join-Path $PSScriptRoot '../bootstrap/bootstrap.ps1'
 # Every shipped PowerShell script must be pure ASCII: Windows PowerShell 5.1 reads a BOM-less file as ANSI, and
 # a UTF-8 em dash (E2 80 94) then decodes to a closing curly quote that ends any string it sits in, so the script
 # no longer parses there. pwsh 7 (this CI) reads UTF-8 fine, so only this byte check catches it.
-$shipped = @('bootstrap/bootstrap.ps1', 'mdm/verify-gate.ps1')
+$shipped = @('bootstrap/bootstrap.ps1', 'mdm/verify-gate.ps1', 'mdm/scheduled-update.ps1', 'mdm/scheduled-update-loader.ps1')
 $broken = $false
 foreach ($rel in $shipped) {
   $path = Join-Path $PSScriptRoot "../$rel"
