@@ -121,6 +121,13 @@ function Ensure-Cosign {
   $script:CosignBin = $tmp
 }
 
+# Invoke-Cosign runs cosign quietly, leaving its exit code in $LASTEXITCODE. cosign reports on stderr even when it
+# passes, which Windows PowerShell 5.1 turns into a terminating error under 'Stop', so it runs under 'Continue'.
+function Invoke-Cosign {
+  $ErrorActionPreference = 'Continue'
+  & $script:CosignBin @args *> $null
+}
+
 function Write-TrustedRoot {
   $path = Join-Path ([IO.Path]::GetTempPath()) ("auspex-trusted-root-" + [guid]::NewGuid().ToString() + ".json")
   [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($TrustedRootB64))
@@ -149,12 +156,12 @@ function Resolve-BinaryDigest([string]$u, [string]$MediaType = 'application/octe
   try {
     Fetch "$verRoot/manifest.json" $manifest.FullName
     Fetch "$verRoot/manifest.json.cosign.bundle" $bundle.FullName
-    & $script:CosignBin verify-blob `
+    Invoke-Cosign verify-blob `
       --bundle $bundle.FullName `
       --trusted-root $rootPath `
       --certificate-identity-regexp $CosignIdentityRe `
       --certificate-oidc-issuer $CosignOidcIssuer `
-      $manifest.FullName *> $null
+      $manifest.FullName
     if ($LASTEXITCODE -ne 0) {
       Fail "cosign FAILED to verify $verRoot/manifest.json against the pinned release identity - refusing to install" 13
     }
@@ -328,12 +335,12 @@ function Resolve-ChannelRelease([string]$base, [string]$channel) {
   try {
     Fetch $u $doc.FullName
     Fetch "$u.cosign.bundle" $bundle.FullName
-    & $script:CosignBin verify-blob `
+    Invoke-Cosign verify-blob `
       --bundle $bundle.FullName `
       --trusted-root $rootPath `
       --certificate-identity-regexp $CosignChannelIdentityRe `
       --certificate-oidc-issuer $CosignOidcIssuer `
-      $doc.FullName *> $null
+      $doc.FullName
     if ($LASTEXITCODE -ne 0) {
       Fail "cosign FAILED to verify $u against the pinned channel identity - refusing to trust it" 13
     }
