@@ -42,6 +42,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   loader's pinned SHA-256, so a Mac downloads the script from GitHub once per loader, not on every run. Paste
   this release's loader to get it. `mdm/README.md` now suggests running it every 12 hours.
 
+### Fixed
+
+- **Installers** · **Windows PowerShell 5.1 no longer fails a verified install** — cosign reports `Verified OK` on
+  stderr, which Windows PowerShell 5.1 turned into a fatal error, so `auspex-install.ps1` failed every install it
+  verified with cosign (the default) and every `-Channel` lookup, and `auspex-verify-gate.ps1` refused every
+  installer. Both now judge cosign by its exit code alone. PowerShell 7 was not affected.
+
 ## [2026-11-12]
 
 Published components:

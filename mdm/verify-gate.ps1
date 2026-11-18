@@ -83,6 +83,13 @@ function Ensure-Cosign {
   $script:CosignBin = $tmp
 }
 
+# Invoke-Cosign runs cosign quietly, leaving its exit code in $LASTEXITCODE. cosign reports on stderr even when it
+# passes, which Windows PowerShell 5.1 turns into a terminating error under 'Stop', so it runs under 'Continue'.
+function Invoke-Cosign {
+  $ErrorActionPreference = 'Continue'
+  & $script:CosignBin @args *> $null
+}
+
 function Write-TrustedRoot {
   $path = Join-Path ([IO.Path]::GetTempPath()) ("auspex-trusted-root-" + [guid]::NewGuid().ToString() + ".json")
   [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($TrustedRootB64))
@@ -105,12 +112,12 @@ function Verify-CosignBundle([string]$file, [string]$bundleSrc) {
     Remove-Item -LiteralPath $rootPath -Force
     Fail "cosign bundle not found at $bundleSrc - refusing to install" 11
   }
-  & $script:CosignBin verify-blob `
+  Invoke-Cosign verify-blob `
     --bundle $bundlePath `
     --trusted-root $rootPath `
     --certificate-identity-regexp $CosignIdentityRe `
     --certificate-oidc-issuer $CosignOidcIssuer `
-    $file *> $null
+    $file
   $rc = $LASTEXITCODE
   if ($tmpBundle) { Remove-Item -LiteralPath $tmpBundle.FullName -Force }
   Remove-Item -LiteralPath $rootPath -Force
