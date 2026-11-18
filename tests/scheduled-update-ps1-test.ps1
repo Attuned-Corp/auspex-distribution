@@ -390,11 +390,13 @@ try {
   Check 'the real query finds no auspex .msi on this machine' (Get-InstalledMsiVersion) ''
   $root = Join-Path $work 'trusted_root.json'
   [IO.File]::WriteAllBytes($root, [Convert]::FromBase64String($TrustedRootB64))
+  $ErrorActionPreference = 'Continue' # cosign reports on stderr, which 5.1 turns into a terminating error under 'Stop'
   foreach ($c in @(@('v0.11.0', 0), @('v0.12.1', 1), @('v0.11', 1))) {
     & $cosign verify-blob --bundle "$msiPath.cosign.bundle" --trusted-root $root --certificate-identity-regexp (Get-ReleaseIdentityRe $c[0]) `
       --certificate-oidc-issuer $CosignOidcIssuer $msiPath *> $null
     Check "the v0.11.0 .msi verifies as $($c[0])" ([int]($LASTEXITCODE -ne 0)) $c[1]
   }
+  $ErrorActionPreference = 'Stop'
 
   Write-Host '==> loader'
   $l = [IO.File]::ReadAllText($releasedLoader)
