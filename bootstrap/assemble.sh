@@ -8,10 +8,10 @@
 # Emits (into the OUT dir, default dist/):
 #   auspex-install.sh / .ps1       — curl|sh + irm|iex bootstrap (first-acquisition)
 #   auspex-verify-gate.sh / .ps1   — MDM verify-before-install gate (AC7)
-#   auspex-scheduled-update.sh     — MDM scheduled update (macOS)
-#   auspex-scheduled-update-loader.sh — the short loader an admin pastes, pinned to that script by SHA-256
+#   auspex-scheduled-update.sh / .ps1 — MDM scheduled update (macOS / Windows)
+#   auspex-scheduled-update-loader.sh / .ps1 — the short loader an admin pastes, pinned to that script by SHA-256
 #
-#   RELEASE_TAG names the release the loader downloads from (default: unreleased).
+#   RELEASE_TAG names the release the loaders download from (default: unreleased).
 #
 #   bootstrap/assemble.sh [INSTALLER_OUT]     # default INSTALLER_OUT = dist/auspex-install.sh
 set -euo pipefail
@@ -25,6 +25,8 @@ GATE="$ROOT/mdm/verify-gate.sh"
 GATE_PS="$ROOT/mdm/verify-gate.ps1"
 UPDATE="$ROOT/mdm/scheduled-update.sh"
 LOADER="$ROOT/mdm/scheduled-update-loader.sh"
+UPDATE_PS="$ROOT/mdm/scheduled-update.ps1"
+LOADER_PS="$ROOT/mdm/scheduled-update-loader.ps1"
 
 OUT="${1:-$ROOT/dist/auspex-install.sh}"
 OUT_DIR="$(dirname "$OUT")"
@@ -33,9 +35,11 @@ GATE_OUT="$OUT_DIR/auspex-verify-gate.sh"
 GATE_OUT_PS="$OUT_DIR/auspex-verify-gate.ps1"
 UPDATE_OUT="$OUT_DIR/auspex-scheduled-update.sh"
 LOADER_OUT="$OUT_DIR/auspex-scheduled-update-loader.sh"
+UPDATE_OUT_PS="$OUT_DIR/auspex-scheduled-update.ps1"
+LOADER_OUT_PS="$OUT_DIR/auspex-scheduled-update-loader.ps1"
 RELEASE_TAG="${RELEASE_TAG:-unreleased}"
 
-for f in "$LIB" "$ROOT_JSON" "$BOOT" "$BOOT_PS" "$GATE" "$GATE_PS" "$UPDATE" "$LOADER"; do
+for f in "$LIB" "$ROOT_JSON" "$BOOT" "$BOOT_PS" "$GATE" "$GATE_PS" "$UPDATE" "$LOADER" "$UPDATE_PS" "$LOADER_PS"; do
   [ -f "$f" ] || { echo "assemble: missing input $f" >&2; exit 1; }
 done
 mkdir -p "$OUT_DIR"
@@ -114,12 +118,18 @@ emit_bash "$GATE" "$GATE_OUT" "Self-contained auspex MDM verify-before-install g
 emit_bash "$UPDATE" "$UPDATE_OUT" "Self-contained auspex MDM scheduled update (macOS); see mdm/README.md."
 emit_ps   "$BOOT_PS" "$OUT_PS"
 emit_ps   "$GATE_PS" "$GATE_OUT_PS"
+emit_ps   "$UPDATE_PS" "$UPDATE_OUT_PS"
 
-# The loader an admin pastes pins the scheduled update script above by release tag and SHA-256.
-update_sha="$( (shasum -a 256 "$UPDATE_OUT" 2>/dev/null || sha256sum "$UPDATE_OUT") | cut -d ' ' -f 1)"
-sed -e "s|@TAG@|${RELEASE_TAG}|" -e "s|@SHA256@|${update_sha}|" "$LOADER" >"$LOADER_OUT"
+# Each loader an admin pastes pins its scheduled update script above by release tag and SHA-256.
+emit_loader() { # <script> <loader> <out>
+  local sha
+  sha="$( (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -d ' ' -f 1)"
+  sed -e "s|@TAG@|${RELEASE_TAG}|" -e "s|@SHA256@|${sha}|" "$2" >"$3"
+  echo "assemble: wrote $3 (pins ${RELEASE_TAG} sha256:${sha})"
+}
+emit_loader "$UPDATE_OUT" "$LOADER" "$LOADER_OUT"
 chmod 0755 "$LOADER_OUT"
-echo "assemble: wrote $LOADER_OUT (pins ${RELEASE_TAG} sha256:${update_sha})"
+emit_loader "$UPDATE_OUT_PS" "$LOADER_PS" "$LOADER_OUT_PS"
 
 # Cursor cloud recipe scripts (cursor-cloud/) — staged into dist/ so the Release signs + ships them as
 # first-class assets (parity with the Dev Container Feature). Unlike the installers above they need NO

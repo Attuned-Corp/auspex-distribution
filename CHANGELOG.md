@@ -35,6 +35,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Installers** · **Keep Windows fleets on a release channel** — `auspex-scheduled-update.ps1` lets an MDM
+  keep Windows devices on auspex's `stable` (or `latest`) channel without approving each release. Paste its
+  short loader, `auspex-scheduled-update-loader.ps1`, into an Intune Remediation's detection script that runs
+  as SYSTEM, and set your download host and channel in its first lines. Each run verifies the signed channel
+  document and that release's `.msi` before `msiexec` installs it, and a failed run reports as an issue in
+  Intune. See `mdm/README.md`.
+
 ### Changed
 
 - **Installers** · **The scheduled update loader caches the script** — `auspex-scheduled-update-loader.sh`

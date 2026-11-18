@@ -53,6 +53,10 @@ jobs:
       - name: PowerShell installer contract
         run: make ps1-test
 
+      # The decision and channel document cases; the Windows job runs the rest.
+      - name: MDM scheduled update contract (Windows script, portable cases)
+        run: make scheduled-update-ps1-test
+
       # Last, as it removes jq: a Mac before macOS 15 has no /usr/bin/jq, so the script caches the pinned one.
       - name: MDM scheduled update contract (no system jq)
         run: |
@@ -101,6 +105,30 @@ jobs:
       - name: bootstrap.ps1 contract (Windows PowerShell 5.1)
         shell: cmd
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\bootstrap-ps1-test.ps1
+
+  # An MDM such as Intune runs the scheduled update as SYSTEM under Windows PowerShell 5.1. This runs the assembled
+  # script and the released loader the same way, elevated, against the signed fixtures; only msiexec is stubbed.
+  scheduled-update-windows:
+    name: MDM scheduled update contract (Windows PowerShell 5.1)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      # assemble.sh runs under Git Bash, which can't run the scripts with CRLF line endings.
+      - name: Check out with LF line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Assemble the release scripts
+        shell: bash
+        env:
+          RELEASE_TAG: test-release
+        run: ./bootstrap/assemble.sh
+
+      - name: scheduled update contract (Windows PowerShell 5.1)
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\scheduled-update-ps1-test.ps1
 
   changelog:
     name: Validate CHANGELOG.md
@@ -241,6 +269,21 @@ jobs:
             rc=1
           fi
 
+          # The Windows scheduled update finds the installed .msi by its UpgradeCode, which auspex fixes forever.
+          upgrade_code="$(sed -n "s/^\$UpgradeCode = '{\(.*\)}'\$/\1/p" mdm/scheduled-update.ps1)"
+          if [ -z "$upgrade_code" ]; then
+            echo "::error::could not read the UpgradeCode from mdm/scheduled-update.ps1"
+            rc=1
+          elif ! wxs="$(fetch_raw package/windows/auspex.wxs)"; then
+            echo "::error::could not read package/windows/auspex.wxs from auspex@${ref}"
+            rc=1
+          elif printf '%s\n' "$wxs" | grep -qiF "UpgradeCode=\"${upgrade_code}\""; then
+            echo "ok auspex.wxs has UpgradeCode ${upgrade_code}"
+          else
+            echo "::error::DRIFT: auspex@${ref} package/windows/auspex.wxs doesn't have UpgradeCode ${upgrade_code}, mdm/scheduled-update.ps1's"
+            rc=1
+          fi
+
           [ "$rc" -eq 0 ] || { echo "::error::this repo has drifted from auspex@${ref} — reconcile before merging"; exit 1; }
           echo "this repo is in lock-step with auspex@${ref}"
 
@@ -256,6 +299,7 @@ jobs:
       - install-verify
       - install-verify-macos
       - ps1-windows
+      - scheduled-update-windows
       - changelog
       - reconcile
     runs-on: ubuntu-latest
