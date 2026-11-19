@@ -35,6 +35,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-11-19]
+
+Published components:
+
+- **Install surface** — `installers-v0.1.6` (GitHub Release; adds the Windows scheduled update script and its
+  loader, caches the macOS script in its loader, and fixes cosign checks under Windows PowerShell 5.1)
+
 ### Added
 
 - **Installers** · **Keep Windows fleets on a release channel** — `auspex-scheduled-update.ps1` lets an MDM
