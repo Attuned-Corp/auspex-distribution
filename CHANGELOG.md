@@ -35,6 +35,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Installers** · **Fetch a release's installer by version with the MDM gate** — `auspex-verify-gate.sh
+  --base-url <host> --version v1.2.3` downloads that release's macOS `.pkg`, or with `--os windows` its `.msi`,
+  and verifies it, so you no longer build the URL yourself. `auspex-verify-gate.ps1 -BaseUrl <host> -Version
+  v1.2.3` does the same for the `.msi` that matches the device's CPU. Both require that release's own
+  signature, so a genuine older installer served at the release's URL is refused, and both fall back to
+  `AUSPEX_BASE_URL` for the host.
+- **Installers** · **Save the gate's download under its published name** — `--out-dir` (`-OutDir`) saves the
+  verified installer in a directory under its published name, such as `auspex_1.2.3_darwin_universal.pkg`.
+  With `--version` and no `--out`, it goes to the current directory, ready to upload to an MDM that hosts
+  packages itself.
+
+### Changed
+
+- **Installers** · **A failed gate run keeps the file already at `--out`** — the gate now downloads beside
+  the destination and replaces it only once the new file verifies. Before, a run that failed deleted whatever
+  was already at `--out` (`-Out`).
+
+### Fixed
+
+- **Installers** · **The MDM gates exit with their documented codes** — `auspex-verify-gate.ps1` exited 1 on
+  every refusal, and `auspex-verify-gate.sh --url` exited with the download tool's code, such as 22, when the
+  installer itself couldn't be downloaded. Both now exit 2 for bad arguments, 11 for a failed download and 13
+  for a bad signature, so a wrapper can tell the failures apart.
+- **Installers** · **The Windows MDM gate downloads cosign from 32-bit PowerShell** — Intune runs scripts in
+  32-bit PowerShell by default, where `auspex-verify-gate.ps1` saw an x86 CPU and exited 16 unless cosign was
+  already installed. It now reads the device's real CPU, as `auspex-scheduled-update.ps1` does.
+
 ## [2026-11-19]
 
 Published components:

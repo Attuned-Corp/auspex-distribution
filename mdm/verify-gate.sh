@@ -18,6 +18,7 @@
 #
 # Usage:  verify-gate.sh --installer /path/auspex.pkg              # verify a pre-staged installer
 #         verify-gate.sh --url https://<cdn>/…/auspex.pkg --out /tmp/auspex.pkg   # fetch then verify
+#         verify-gate.sh --base-url https://<cdn> --version v1.2.3 --out /tmp/auspex.pkg   # that release's macOS .pkg
 set -euo pipefail
 
 AUSPEX_VERIFY_LOG_PREFIX="auspex mdm-gate"
@@ -33,8 +34,13 @@ fi
 # --- options ---------------------------------------------------------------------------------------------
 INSTALLER=""                 # local path to the staged .pkg/.msi to verify
 URL=""                       # OR a CDN URL to fetch the installer from (origin #1) before verifying
+VERSION=""                   # OR an auspex release tag: fetch that release's installer from BASE_URL
+BASE_URL="${AUSPEX_BASE_URL:-}" # the download host for --version; no default, the host is never committed here
+OS="darwin"                  # --version: darwin (.pkg) | windows (.msi)
+ARCH=""                      # --version --os windows: amd64 (default) | arm64
 BUNDLE=""                    # per-artifact .cosign.bundle (path or URL); default: <installer|url>.cosign.bundle
-OUT=""                       # where a --url download is saved (default: a temp file; printed on success)
+OUT=""                       # where the download is saved
+OUT_DIR=""                   # OR the directory to save it in under its published file name
 VERIFY="cosign"              # cosign (default) | none (explicit, discouraged escape hatch)
 
 usage() {
@@ -43,7 +49,14 @@ auspex mdm-gate — verify a managed installer (.pkg/.msi) before install; fail-
 
   --installer <path>  local, already-staged installer to verify
   --url <url>         CDN URL to fetch the installer from, then verify (origin #1)
-  --out <path>        where to save the --url download (default: a temp file, path printed on success)
+  --version <tag>     auspex release to fetch the installer of (e.g. v1.2.3 or 1.2.3), then verify it carries
+                      that release's own signature. Needs --base-url.
+  --base-url <url>    your auspex download host (https://…), from your install instructions. Env: AUSPEX_BASE_URL
+  --os <os>           with --version: darwin (default, the .pkg) | windows (the .msi)
+  --arch <arch>       with --version --os windows: amd64 (default) | arm64
+  --out <path>        where to save the download
+  --out-dir <dir>     OR the directory to save it in, under its published file name
+                      (default: --version saves to the current directory; --url to a temp file)
   --bundle <path|url> per-artifact cosign bundle (default: the installer path/url + '.cosign.bundle')
   --verify <mode>     cosign (default) | none (explicit opt-out — NOT recommended for a security agent)
   -h, --help          this help
@@ -57,7 +70,12 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --installer) INSTALLER="${2:-}"; shift 2 ;;
     --url) URL="${2:-}"; shift 2 ;;
+    --version) VERSION="${2:-}"; shift 2 ;;
+    --base-url) BASE_URL="${2:-}"; shift 2 ;;
+    --os) OS="${2:-}"; shift 2 ;;
+    --arch) ARCH="${2:-}"; shift 2 ;;
     --out) OUT="${2:-}"; shift 2 ;;
+    --out-dir) OUT_DIR="${2:-}"; shift 2 ;;
     --bundle) BUNDLE="${2:-}"; shift 2 ;;
     --verify) VERIFY="${2:-}"; shift 2 ;;
     -h | --help) usage; exit 0 ;;
@@ -70,19 +88,69 @@ case "$VERIFY" in
   *) echo "${AUSPEX_VERIFY_LOG_PREFIX}: --verify must be cosign|none (got '${VERIFY}')" >&2; exit "$AUSPEX_VERIFY_EX_USAGE" ;;
 esac
 
-if [ -n "$INSTALLER" ] && [ -n "$URL" ]; then
-  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pass --installer OR --url, not both" >&2
+sources=0
+for s in "$INSTALLER" "$URL" "$VERSION"; do
+  if [ -n "$s" ]; then sources=$((sources + 1)); fi
+done
+if [ "$sources" -gt 1 ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pass one of --installer, --url or --version, not several" >&2
   exit "$AUSPEX_VERIFY_EX_USAGE"
 fi
-if [ -z "$INSTALLER" ] && [ -z "$URL" ]; then
-  echo "${AUSPEX_VERIFY_LOG_PREFIX}: one of --installer <path> or --url <url> is required" >&2
+if [ "$sources" -eq 0 ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: one of --installer <path>, --url <url> or --version <tag> is required" >&2
   usage
   exit "$AUSPEX_VERIFY_EX_USAGE"
 fi
+if [ -n "$OUT" ] && [ -n "$OUT_DIR" ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: pass --out OR --out-dir, not both" >&2
+  exit "$AUSPEX_VERIFY_EX_USAGE"
+fi
+if [ -n "$OUT" ] && [ -d "$OUT" ]; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: --out ${OUT} is a directory — pass --out-dir to save in it" >&2
+  exit "$AUSPEX_VERIFY_EX_USAGE"
+fi
+if [ -n "$INSTALLER" ] && { [ -n "$OUT" ] || [ -n "$OUT_DIR" ]; }; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: --out and --out-dir apply to a download, not to --installer" >&2
+  exit "$AUSPEX_VERIFY_EX_USAGE"
+fi
+if [ -z "$VERSION" ] && { [ "$OS" != darwin ] || [ -n "$ARCH" ]; }; then
+  echo "${AUSPEX_VERIFY_LOG_PREFIX}: --os and --arch pick the installer for --version" >&2
+  exit "$AUSPEX_VERIFY_EX_USAGE"
+fi
+
+if [ -n "$VERSION" ]; then
+  case "$VERSION" in v*) ;; *) VERSION="v${VERSION}" ;; esac
+  release_tag_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+  if ! [[ "$VERSION" =~ $release_tag_re ]]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --version must be a release tag such as v1.2.3 (got '${VERSION}')" >&2
+    exit "$AUSPEX_VERIFY_EX_USAGE"
+  fi
+  if [ -z "$BASE_URL" ]; then
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: --version needs your auspex download host — pass --base-url <url> (from your install instructions) or set AUSPEX_BASE_URL" >&2
+    exit "$AUSPEX_VERIFY_EX_USAGE"
+  fi
+  case "${OS}/${ARCH}" in
+    darwin/) URL="${BASE_URL%/}/releases/${VERSION}/darwin/auspex_${VERSION#v}_darwin_universal.pkg" ;;
+    windows/ | windows/amd64 | windows/arm64)
+      URL="${BASE_URL%/}/releases/${VERSION}/windows/auspex_${VERSION#v}_windows_${ARCH:-amd64}.msi" ;;
+    darwin/*)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: the macOS .pkg is universal — --arch applies only to --os windows" >&2
+      exit "$AUSPEX_VERIFY_EX_USAGE" ;;
+    *)
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: --os must be darwin|windows and --arch amd64|arm64 (got '${OS}' '${ARCH}')" >&2
+      exit "$AUSPEX_VERIFY_EX_USAGE" ;;
+  esac
+  # The library accepts any release's signature. Pin it to this tag's, or a genuine older installer served
+  # at this release's URL would verify.
+  COSIGN_IDENTITY_RE="${COSIGN_IDENTITY_RE%%@refs/tags/*}@refs/tags/${VERSION//./\\.}\$"
+  [ -z "$OUT" ] && [ -z "$OUT_DIR" ] && OUT_DIR="."
+fi
+[ -n "$OUT_DIR" ] && OUT="${OUT_DIR%/}/${URL##*/}"
 
 # --- fetch (if --url) → verify (fail-closed) -------------------------------------------------------------
 # A download we created is removed on ANY non-zero exit so a refused/unverified installer is never left on
 # disk (fail-closed); a pre-staged --installer is left untouched. verify_* funcs exit directly on failure.
+# A download to --out lands beside it and replaces it only once verified, so a failed run keeps a good copy.
 _fetched_tmp=""
 # Preserve the real exit status: a bare `[ -n "" ] && …` tail would return non-zero and CLOBBER a
 # fail-closed exit code (e.g. 13) down to 1 (bash EXIT-trap semantics).
@@ -91,13 +159,19 @@ trap _gate_cleanup EXIT
 
 if [ -n "$URL" ]; then
   if [ -n "$OUT" ]; then
-    INSTALLER="$OUT"
+    INSTALLER="$(mktemp "${OUT}.partial.XXXXXX")" || {
+      echo "${AUSPEX_VERIFY_LOG_PREFIX}: cannot write beside ${OUT}" >&2
+      exit "$AUSPEX_VERIFY_EX_ENV"
+    }
   else
     INSTALLER="$(mktemp)"
   fi
   _fetched_tmp="$INSTALLER"
   echo "${AUSPEX_VERIFY_LOG_PREFIX}: downloading ${URL}"
-  fetch "$URL" "$INSTALLER"
+  fetch "$URL" "$INSTALLER" || {
+    echo "${AUSPEX_VERIFY_LOG_PREFIX}: could not fetch ${URL}" >&2
+    exit "$AUSPEX_VERIFY_EX_FETCH"
+  }
   [ -z "$BUNDLE" ] && BUNDLE="${URL}.cosign.bundle"
 else
   [ -f "$INSTALLER" ] || {
@@ -117,5 +191,10 @@ case "$VERIFY" in
 esac
 
 # Verified: the download (if any) is trusted — keep it and hand its path to the caller to install.
+if [ -n "$URL" ] && [ -n "$OUT" ]; then
+  chmod 0644 "$INSTALLER" # mktemp's 0600; a signed public package needs no secrecy
+  mv -f "$INSTALLER" "$OUT"
+  case "$OUT" in /*) INSTALLER="$OUT" ;; *) INSTALLER="${PWD%/}/${OUT#./}" ;; esac # absolute, for MDM logs
+fi
 _fetched_tmp=""
 echo "${AUSPEX_VERIFY_LOG_PREFIX}: VERIFIED — safe to install: ${INSTALLER}"
