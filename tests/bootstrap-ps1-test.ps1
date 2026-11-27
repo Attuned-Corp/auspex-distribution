@@ -288,7 +288,13 @@ Write-Ascii (Join-Path $cdn 'releases/latest/VERSION') 'v0.13.0'
 $null = Test-Install '-Verify checksum follows the latest marker' @('-BaseUrl', $base, '-Verify', 'checksum') 'both' 'resolved latest -> v0.13.0'
 
 # ---- verify-gate.ps1 over the same cosign stub -----------------------------------------------------------
-$gateText = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../mdm/verify-gate.ps1'))
+# Its Fetch is swapped like bootstrap.ps1's, so -Url and -Version download from the fixture tree.
+$gatePath = Join-Path $PSScriptRoot '../mdm/verify-gate.ps1'
+$gateText = [IO.File]::ReadAllText($gatePath)
+$gateFetch = [System.Management.Automation.Language.Parser]::ParseFile($gatePath, [ref]$null, [ref]$null).Find(
+  { param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Fetch' }, $true)
+if (-not $gateFetch) { Write-Host 'FAIL  verify-gate.ps1 must define Fetch'; exit 1 }
+$gateText = $gateText.Substring(0, $gateFetch.Extent.StartOffset) + $swaps['Fetch'] + $gateText.Substring($gateFetch.Extent.EndOffset)
 $gate = Join-Path $work 'gate.ps1'
 [IO.File]::WriteAllText($gate, ($gateText.Replace('@@AUSPEX_TRUSTED_ROOT_B64@@', 'e30=') -replace '@@AUSPEX_[A-Z0-9_]+@@', 'test'), [Text.Encoding]::ASCII)
 Write-Ascii "$exeFile.cosign.bundle" 'dummy-bundle'
@@ -307,6 +313,87 @@ Remove-Item -LiteralPath $cosignFail -Force -ErrorAction SilentlyContinue
 Test-Gate 'verify-gate passes an installer cosign verifies' $true 'VERIFIED - safe to install'
 Write-Ascii $cosignFail 'auspex.exe'
 Test-Gate 'verify-gate refuses an installer cosign rejects' $false 'cosign FAILED to verify'
+Remove-Item -LiteralPath $cosignFail -Force -ErrorAction SilentlyContinue
+
+# -Version saves the release's .msi under its published name and pins cosign to the tag. Each run starts in an
+# empty directory, so any other file left there is a leaked partial or refused download.
+$gateRel = Join-Path $cdn 'releases/v9.8.7/windows'
+foreach ($a in 'amd64', 'arm64') {
+  Write-Ascii (Join-Path $gateRel "auspex_9.8.7_windows_$a.msi") "fake-msi-$a"
+  Write-Ascii (Join-Path $gateRel "auspex_9.8.7_windows_$a.msi.cosign.bundle") 'dummy-bundle'
+}
+$msi64 = 'auspex_9.8.7_windows_amd64.msi'
+function Test-GateDownload([string]$what, [int]$rc, [string]$saved, [string[]]$argv, [string]$served = '', [string]$preseed = '') {
+  $dir = Join-Path $work 'gate-cwd'
+  Remove-Item -LiteralPath $dir, $cosignLog -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force -Path (Join-Path $dir 'out') | Out-Null
+  if ($preseed) { Write-Ascii (Join-Path $dir $preseed) 'previous-good-copy' }
+  $ErrorActionPreference = 'Continue'
+  Push-Location -LiteralPath $dir
+  try { $out = & $shell -NoProfile -ExecutionPolicy Bypass -File $gate @argv 2>&1 | Out-String; $got = $LASTEXITCODE }
+  finally { Pop-Location }
+  $root = (Get-Item -LiteralPath $dir).FullName
+  $left = @(Get-ChildItem -LiteralPath $dir -Recurse -File |
+      ForEach-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') } |
+      Where-Object { $_ -ne $saved -and $_ -ne $preseed })
+  if ($saved -and -not $served) { $served = Split-Path -Leaf $saved }
+  $problem = ''
+  if ($got -ne $rc) { $problem = "expected rc=$rc, got rc=$got" }
+  elseif ($rc -eq 0 -and (Get-Sha (Join-Path $dir $saved)) -ne (Get-Sha (Join-Path $gateRel $served))) { $problem = "$saved isn't $served" }
+  elseif ($rc -eq 0 -and -not ($out -match 'safe to install: (.+)' -and [IO.Path]::IsPathRooted($Matches[1].Trim()) -and
+      $Matches[1].Trim().Replace('\', '/').EndsWith("gate-cwd/$saved"))) {
+    $problem = "didn't report the absolute path of $saved"
+  }
+  elseif ($rc -eq 0 -and $argv -contains '-Version' -and -not ([IO.File]::ReadAllText($cosignLog)).Contains('@refs/tags/v9\.8\.7$')) {
+    $problem = 'verified without pinning the signer to v9.8.7'
+  }
+  elseif ($rc -ne 0 -and $preseed -and [IO.File]::ReadAllText((Join-Path $dir $preseed)) -ne 'previous-good-copy') {
+    $problem = "a refused download replaced the good copy at $preseed"
+  }
+  elseif ($left.Count) { $problem = "left $($left[0]) on disk" }
+  if ($problem) { Write-Host "FAIL  $what - $problem"; Write-Host ($out -replace '(?m)^', '        '); $script:failures++ }
+  else { Write-Host "ok    $what" }
+}
+Test-GateDownload 'verify-gate -Version saves to the current directory' 0 $msi64 @('-BaseUrl', $base, '-Version', 'v9.8.7')
+Test-GateDownload 'verify-gate -Version -Arch arm64 -OutDir' 0 'out/auspex_9.8.7_windows_arm64.msi' @('-BaseUrl', $base, '-Version', 'v9.8.7', '-Arch', 'arm64', '-OutDir', 'out')
+$env:PROCESSOR_ARCHITECTURE = 'ARM64'
+Test-GateDownload 'verify-gate -Version follows an ARM64 device' 0 'auspex_9.8.7_windows_arm64.msi' @('-BaseUrl', $base, '-Version', 'v9.8.7')
+# A 32-bit PowerShell, as Intune runs by default, sees x86 and the real CPU in PROCESSOR_ARCHITEW6432.
+$env:PROCESSOR_ARCHITECTURE = 'x86'
+$env:PROCESSOR_ARCHITEW6432 = 'ARM64'
+Test-GateDownload 'verify-gate -Version follows an ARM64 device from 32-bit PowerShell' 0 'auspex_9.8.7_windows_arm64.msi' @('-BaseUrl', $base, '-Version', 'v9.8.7')
+# With no cosign on PATH, it provisions the amd64 build there too. The fixture's bytes miss the pin, so reaching
+# that check (15) rather than refusing the CPU (16) shows it tried.
+$env:PROCESSOR_ARCHITEW6432 = 'AMD64'
+$savedPath = $env:PATH
+$env:PATH = Split-Path -Parent $shell
+$env:AUSPEX_COSIGN_BASE_URL = 'https://cdn.test/cosign'
+Write-Ascii (Join-Path $cdn 'cosign/test/cosign-windows-amd64.exe') 'not-cosign'
+Test-GateDownload 'verify-gate provisions cosign from 32-bit PowerShell' 15 '' @('-Installer', $exeFile)
+$env:PATH = $savedPath
+Remove-Item Env:AUSPEX_COSIGN_BASE_URL, Env:PROCESSOR_ARCHITEW6432
+$env:PROCESSOR_ARCHITECTURE = 'AMD64'
+$env:AUSPEX_BASE_URL = $base
+Test-GateDownload 'verify-gate -Version 9.8.7 with AUSPEX_BASE_URL' 0 $msi64 @('-Version', '9.8.7')
+Remove-Item Env:AUSPEX_BASE_URL
+Test-GateDownload 'verify-gate -Version -Out' 0 'out/x.msi' @('-BaseUrl', $base, '-Version', 'v9.8.7', '-Out', 'out/x.msi') $msi64
+Test-GateDownload 'verify-gate -Url -OutDir' 0 "out/$msi64" @('-Url', "$base/releases/v9.8.7/windows/$msi64", '-OutDir', 'out')
+Test-GateDownload 'verify-gate -Version of a missing release exits 11' 11 '' @('-BaseUrl', $base, '-Version', 'v9.9.9')
+Test-GateDownload 'verify-gate -OutDir that does not exist exits 16' 16 '' @('-BaseUrl', $base, '-Version', 'v9.8.7', '-OutDir', 'nowhere')
+Write-Ascii $cosignFail '@refs/tags/v9'
+Test-GateDownload 'verify-gate keeps the good copy when cosign rejects (exit 13)' 13 '' @('-BaseUrl', $base, '-Version', 'v9.8.7') '' $msi64
+Remove-Item -LiteralPath $cosignFail -Force
+foreach ($c in @(
+    @('-Version without a host', @('-Version', 'v9.8.7')),
+    @('-Version latest', @('-BaseUrl', $base, '-Version', 'latest')),
+    @('-Version with -Url', @('-BaseUrl', $base, '-Version', 'v9.8.7', '-Url', "$base/releases/v9.8.7/windows/$msi64")),
+    @('-Out with -OutDir', @('-BaseUrl', $base, '-Version', 'v9.8.7', '-Out', 'x.msi', '-OutDir', 'out')),
+    @('-Out naming a directory', @('-BaseUrl', $base, '-Version', 'v9.8.7', '-Out', 'out')),
+    @('-Arch x86', @('-BaseUrl', $base, '-Version', 'v9.8.7', '-Arch', 'x86')),
+    @('-Arch without -Version', @('-Url', "$base/releases/v9.8.7/windows/$msi64", '-Arch', 'arm64')),
+    @('-Installer with -Url', @('-Installer', $exeFile, '-Url', "$base/releases/v9.8.7/windows/$msi64")))) {
+  Test-GateDownload "verify-gate refuses $($c[0]) (exit 2)" 2 '' $c[1]
+}
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($failures) { Write-Host "$failures failure(s)"; exit 1 }

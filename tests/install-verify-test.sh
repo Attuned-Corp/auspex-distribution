@@ -900,6 +900,83 @@ gate_check "gate-bad-signature"  13 1      good           # cosign rejects  → 
 gate_check "gate-missing-bundle" 11 0      missing         # no .cosign.bundle → EX_FETCH, fail closed
 gate_check "gate-none-skips"     0  nostub missing none    # explicit opt-out skips verify (needs no cosign)
 
+# --version pins the signer to its tag, asserted on the identity regexp the stub cosign logs. Each run starts in
+# an empty directory, so any file left beside the expected one is a leaked partial or refused download.
+GATE_REL="$WEBROOT/releases/v9.8.7"
+mkdir -p "$GATE_REL/darwin" "$GATE_REL/windows"
+for f in darwin/auspex_9.8.7_darwin_universal.pkg windows/auspex_9.8.7_windows_amd64.msi \
+  windows/auspex_9.8.7_windows_arm64.msi; do
+  printf 'fake-%s' "${f##*/}" >"$GATE_REL/$f"
+  printf 'dummy-per-artifact-bundle\n' >"$GATE_REL/$f.cosign.bundle"
+done
+GATE_CWD="$WORK/gate-cwd"
+GATE_ENV_BASE="" # AUSPEX_BASE_URL for the gate's environment
+GATE_PRESEED=""  # a file, relative to the gate's cwd, holding a good copy before the run
+GATE_SERVED=""   # the served installer a renamed --out must match; default: the one named like the saved file
+gate_version_check() { # <label> <expect-rc> <stub cosign exit> <file saved, relative to the gate's cwd, or -> [args…]
+  local label="$1" expect_rc="$2" cosign_rc="$3" want="$4" rc=0 problem="" served leftover
+  shift 4
+  rm -rf "$GATE_CWD"
+  mkdir -p "$GATE_CWD/out"
+  [ -n "$GATE_PRESEED" ] && printf 'previous-good-copy' >"$GATE_CWD/$GATE_PRESEED"
+  make_stub_cosign "$cosign_rc"
+  (cd "$GATE_CWD" && env -i PATH="${STUB_DIR}:$PATH" ${GATE_ENV_BASE:+AUSPEX_BASE_URL="$GATE_ENV_BASE"} \
+    bash "$GATE_SH" "$@") >"$WORK/out.log" 2>&1 || rc=$?
+  served="${GATE_SERVED:-$(find "$GATE_REL" -name "${want##*/}" | head -1)}"
+  leftover="$(cd "$GATE_CWD" && find . -type f ! -path "./$want" ! -path "./${GATE_PRESEED}" | head -1)"
+  if [ "$rc" != "$expect_rc" ]; then
+    problem="expected rc=$expect_rc but got rc=$rc"
+  elif [ "$rc" = 0 ] && { [ -z "$served" ] || ! cmp -s "$GATE_CWD/$want" "$served"; }; then
+    problem="verified, but $want isn't the served installer"
+  elif [ "$rc" = 0 ] && ! grep -F -- "safe to install: $(cd "$GATE_CWD" && pwd -P)/$want" "$WORK/out.log" >/dev/null; then
+    problem="didn't report the absolute path of $want"
+  elif [ "$rc" = 0 ] && case " $* " in *" --version "*) true ;; *) false ;; esac &&
+    ! grep -F -- '@refs/tags/v9\.8\.7$' "$COSIGN_CALLS" >/dev/null; then
+    problem="verified without pinning the signer to v9.8.7: $(cat "$COSIGN_CALLS")"
+  elif [ "$rc" != 0 ] && [ -n "$GATE_PRESEED" ] && [ "$(cat "$GATE_CWD/$GATE_PRESEED")" != previous-good-copy ]; then
+    problem="a refused download replaced the good copy at $GATE_PRESEED"
+  elif [ -n "$leftover" ]; then
+    problem="left $leftover on disk"
+  fi
+  if [ -n "$problem" ]; then
+    echo "FAIL [$label]: $problem" >&2
+    sed 's/^/    /' "$WORK/out.log" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  echo "ok [$label]: gate rc=$rc as expected"
+  pass=$((pass + 1))
+}
+PKG_NAME="auspex_9.8.7_darwin_universal.pkg"
+gate_version_check "gate-version-to-cwd"         0  0 "$PKG_NAME" --base-url "$BASE" --version v9.8.7
+GATE_ENV_BASE="$BASE"
+gate_version_check "gate-version-env-host"       0  0 "$PKG_NAME" --version 9.8.7
+GATE_ENV_BASE=""
+gate_version_check "gate-version-out-dir"        0  0 "out/$PKG_NAME" --base-url "$BASE" --version v9.8.7 --out-dir out/
+GATE_SERVED="$GATE_REL/darwin/$PKG_NAME"
+gate_version_check "gate-version-out"            0  0 "out/x.pkg" --base-url "$BASE" --version v9.8.7 --out out/x.pkg
+GATE_SERVED=""
+gate_version_check "gate-version-windows"        0  0 "out/auspex_9.8.7_windows_amd64.msi" \
+  --base-url "$BASE" --version v9.8.7 --os windows --out-dir out
+gate_version_check "gate-version-windows-arm64"  0  0 "auspex_9.8.7_windows_arm64.msi" \
+  --base-url "$BASE" --version v9.8.7 --os windows --arch arm64
+gate_version_check "gate-url-out-dir"            0  0 "out/$PKG_NAME" \
+  --url "$BASE/releases/v9.8.7/darwin/$PKG_NAME" --out-dir out
+gate_version_check "gate-version-missing"        11 0 - --base-url "$BASE" --version v9.9.9
+gate_version_check "gate-out-dir-missing"        16 0 - --base-url "$BASE" --version v9.8.7 --out-dir nowhere
+GATE_PRESEED="$PKG_NAME"
+gate_version_check "gate-version-keeps-good-copy" 13 1 - --base-url "$BASE" --version v9.8.7
+GATE_PRESEED=""
+gate_version_check "gate-version-needs-host"     2  0 - --version v9.8.7
+gate_version_check "gate-version-not-a-tag"      2  0 - --base-url "$BASE" --version latest
+gate_version_check "gate-version-and-url"        2  0 - --base-url "$BASE" --version v9.8.7 \
+  --url "$BASE/releases/v9.8.7/darwin/$PKG_NAME"
+gate_version_check "gate-out-and-out-dir"        2  0 - --base-url "$BASE" --version v9.8.7 --out x --out-dir out
+gate_version_check "gate-out-is-a-directory"     2  0 - --base-url "$BASE" --version v9.8.7 --out out
+gate_version_check "gate-darwin-has-no-arch"     2  0 - --base-url "$BASE" --version v9.8.7 --arch arm64
+gate_version_check "gate-unknown-os"             2  0 - --base-url "$BASE" --version v9.8.7 --os linux
+gate_version_check "gate-os-needs-version"       2  0 - --url "$BASE/releases/v9.8.7/darwin/$PKG_NAME" --os windows
+
 # ---- --channel: the release the signed channel document names (auspex ADR 0066) ---------------------------
 # With no --version the bootstrap installs the release the channel names: latest v0.13.0 (with auspex-capture)
 # or stable v0.12.9 (auspex alone), so what is placed shows which it chose. The stub cosign stands in for the

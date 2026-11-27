@@ -37,6 +37,29 @@ embed the trust anchor, so the runner fetches one file:
 · `13` cosign (bad signature **or** identity/issuer mismatch) · `15` cosign could not be provisioned · `16`
 environment. The MDM wrapper keys on **exit 0** to proceed.
 
+### Fetch a release by version
+
+Pass a release tag instead of a URL, and the gate downloads that release's installer and accepts it only if it
+carries that release's own signature, so a genuine older installer served at the release's URL is refused. The
+host comes from `--base-url` / `-BaseUrl`, or `AUSPEX_BASE_URL`.
+
+The verified file is saved under its published name, such as `auspex_0.1.0_darwin_universal.pkg`, in the
+current directory, or in the directory `--out-dir` / `-OutDir` names. `--out` / `-Out` saves it to an exact
+path instead. A download replaces an existing file only once it verifies, so a failed run keeps a good copy.
+That suits an MDM that hosts packages itself: download the installer on your own machine, then upload it.
+In an MDM script, always pass `--out` / `-Out`: an agent's current directory is often `/` or
+`C:\Windows\System32`. The gate prints the verified file's absolute path on success.
+
+| Script | Picks the installer with | Default |
+|---|---|---|
+| `auspex-verify-gate.sh` | `--os darwin` (the `.pkg`) or `--os windows --arch amd64\|arm64` (the `.msi`) | the macOS `.pkg`; `amd64` for Windows |
+| `auspex-verify-gate.ps1` | `-Arch amd64\|arm64` (always the `.msi`) | the device's CPU, or `amd64` off Windows |
+
+```bash
+bash auspex-verify-gate.sh --base-url "$AUSPEX_BASE_URL" --version v0.1.0                    # the macOS .pkg
+bash auspex-verify-gate.sh --base-url "$AUSPEX_BASE_URL" --version v0.1.0 --os windows --out-dir ./msi
+```
+
 ## macOS — Mosyle (Custom Command)
 
 A Mosyle **Custom Command** runs elevated (root). Verify the release `.pkg` fail-closed, then hand it to
@@ -48,7 +71,6 @@ set -euo pipefail
 
 VER="v0.1.0"                                   # the auspex release tag to deploy
 BASE="${AUSPEX_BASE_URL:?set to your auspex distribution host — see your install instructions}"
-PKG="${BASE%/}/releases/${VER}/darwin/auspex_${VER#v}_darwin_universal.pkg"
 STAGE="/tmp/auspex_${VER}.pkg"
 GATE="/tmp/auspex-verify-gate.sh"
 
@@ -58,7 +80,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' -o "$GATE" \
 
 # Verify-before-install: the gate fetches the .pkg + its .cosign.bundle from the CDN and verifies fail-closed;
 # `installer` runs ONLY if the gate exits 0. Any verify failure aborts the command (and the deploy).
-bash "$GATE" --url "$PKG" --out "$STAGE" \
+bash "$GATE" --base-url "$BASE" --version "$VER" --out "$STAGE" \
   && installer -pkg "$STAGE" -target /
 ```
 
@@ -194,7 +216,6 @@ $ErrorActionPreference = 'Stop'
 $Ver  = 'v0.1.0'
 $Base = $env:AUSPEX_BASE_URL   # your auspex distribution host — see your install instructions
 if (-not $Base) { throw 'set AUSPEX_BASE_URL to your auspex distribution host' }
-$Msi  = "$($Base.TrimEnd('/'))/releases/$Ver/windows/auspex_$($Ver.TrimStart('v'))_windows_amd64.msi"
 $Stage = "$env:TEMP\auspex_$Ver.msi"
 $Gate  = "$env:TEMP\auspex-verify-gate.ps1"
 
@@ -202,7 +223,8 @@ Invoke-WebRequest -UseBasicParsing -MaximumRedirection 5 `
   -Uri 'https://github.com/Attuned-Corp/auspex-distribution/releases/latest/download/auspex-verify-gate.ps1' `
   -OutFile $Gate
 
-& powershell -ExecutionPolicy Bypass -File $Gate -Url $Msi -Out $Stage
+# -Version picks the .msi for this device's CPU (amd64 or arm64).
+& powershell -ExecutionPolicy Bypass -File $Gate -BaseUrl $Base -Version $Ver -Out $Stage
 if ($LASTEXITCODE -ne 0) { throw "auspex verify-gate refused the installer (rc=$LASTEXITCODE) — aborting" }
 Start-Process msiexec.exe -ArgumentList '/i', "`"$Stage`"", '/qn', '/norestart' -Wait -PassThru
 ```

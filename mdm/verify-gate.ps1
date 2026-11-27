@@ -19,12 +19,22 @@
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File auspex-verify-gate.ps1 -Installer C:\Windows\Temp\auspex.msi
   if ($LASTEXITCODE -eq 0) { Start-Process msiexec.exe -ArgumentList '/i','C:\Windows\Temp\auspex.msi','/qn' -Wait }
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File auspex-verify-gate.ps1 -BaseUrl https://<cdn> -Version v1.2.3 -OutDir C:\Windows\Temp
+  Downloads release v1.2.3's .msi for this device's CPU (or -Arch amd64|arm64) under its published file name, and
+  accepts it only if it carries that release's own signature. With no -Out or -OutDir it saves to the current
+  directory.
 #>
 [CmdletBinding()]
 param(
   [string]$Installer,
   [string]$Url,
+  [string]$Version,
+  [string]$BaseUrl = $env:AUSPEX_BASE_URL,
+  [string]$Arch,
   [string]$Out,
+  [string]$OutDir,
   [string]$Bundle,
   [ValidateSet('cosign', 'none')]
   [string]$Verify = 'cosign',
@@ -42,8 +52,12 @@ $CosignVersion    = '@@AUSPEX_COSIGN_VERSION@@'
 $CosignWinSha256  = '@@AUSPEX_COSIGN_WINDOWS_AMD64_SHA@@'
 $TrustedRootB64   = '@@AUSPEX_TRUSTED_ROOT_B64@@'
 
+# Fail removes an unverified download and exits with $code. It writes to stderr directly: Write-Error under 'Stop'
+# would throw, and the script would exit 1 instead of the documented code.
+$script:Partial = $null
 function Fail([string]$msg, [int]$code = 1) {
-  Write-Error "auspex mdm-gate: $msg"
+  if ($script:Partial -and (Test-Path -LiteralPath $script:Partial)) { Remove-Item -LiteralPath $script:Partial -Force }
+  [Console]::Error.WriteLine("auspex mdm-gate: $msg")
   exit $code
 }
 
@@ -64,11 +78,17 @@ function Get-Sha256Hex([string]$path) {
   (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLower()
 }
 
+# A 32-bit PowerShell on 64-bit Windows, such as Intune's default script host, reports x86 in PROCESSOR_ARCHITECTURE
+# and the real CPU in PROCESSOR_ARCHITEW6432.
+function Get-DeviceCpu {
+  if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+}
+
 $script:CosignBin = $null
 function Ensure-Cosign {
   $existing = Get-Command cosign -ErrorAction SilentlyContinue
   if ($existing) { $script:CosignBin = $existing.Source; return }
-  $arch = $env:PROCESSOR_ARCHITECTURE
+  $arch = Get-DeviceCpu
   if ($arch -ne 'AMD64') {
     Fail "cosign auto-provisioning is pinned for windows/amd64; on '$arch' bake cosign into the runner image" 16
   }
@@ -127,14 +147,46 @@ function Verify-CosignBundle([string]$file, [string]$bundleSrc) {
   Write-Host "auspex mdm-gate: cosign-verified ($file signature valid for the pinned release identity)"
 }
 
-# --- resolve installer (fetch if -Url) -------------------------------------------------------------------
-if ($Installer -and $Url) { Fail "pass -Installer OR -Url, not both" 2 }
-if (-not $Installer -and -not $Url) { Fail "one of -Installer <path> or -Url <url> is required" 2 }
+# --- resolve installer (fetch if -Url or -Version) --------------------------------------------------------
+$sources = @($Installer, $Url, $Version | Where-Object { $_ }).Count
+if ($sources -gt 1) { Fail "pass one of -Installer, -Url or -Version, not several" 2 }
+if ($sources -eq 0) { Fail "one of -Installer <path>, -Url <url> or -Version <tag> is required" 2 }
+if ($Out -and $OutDir) { Fail "pass -Out OR -OutDir, not both" 2 }
+if ($Out -and (Test-Path -LiteralPath $Out -PathType Container)) { Fail "-Out $Out is a directory - pass -OutDir to save in it" 2 }
+if ($Installer -and ($Out -or $OutDir)) { Fail "-Out and -OutDir apply to a download, not to -Installer" 2 }
+if ($Arch -and -not $Version) { Fail "-Arch picks the installer for -Version" 2 }
 
+if ($Version) {
+  if (-not $Version.StartsWith('v')) { $Version = "v$Version" }
+  if ($Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') {
+    Fail "-Version must be a release tag such as v1.2.3 (got '$Version')" 2
+  }
+  if (-not $BaseUrl) {
+    Fail "-Version needs your auspex download host - pass -BaseUrl <url> (from your install instructions) or set AUSPEX_BASE_URL" 2
+  }
+  if (-not $Arch) {
+    # Off Windows, such as an admin fetching the .msi to upload, there is no device CPU to match: default to amd64.
+    $Arch = switch (Get-DeviceCpu) { 'ARM64' { 'arm64' } default { 'amd64' } }
+  }
+  if ($Arch -cnotin @('amd64', 'arm64')) { Fail "-Arch must be amd64 or arm64 (got '$Arch')" 2 }
+  $Url = "$($BaseUrl.TrimEnd('/'))/releases/$Version/windows/auspex_$($Version.Substring(1))_windows_$Arch.msi"
+  # Pin the signer to this tag's, or a genuine older .msi served at this release's URL would verify.
+  $CosignIdentityRe = ($CosignIdentityRe -replace '@refs/tags/.*$', '') + '@refs/tags/' + $Version.Replace('.', '\.') + '$'
+  if (-not $Out -and -not $OutDir) { $OutDir = (Get-Location).Path }
+}
+if ($OutDir) { $Out = Join-Path $OutDir ($Url -replace '^.*/', '') }
+
+# A download to -Out lands beside it and replaces it only once verified, so a failed run keeps a good copy.
 $fetched = $false
 if ($Url) {
-  if (-not $Out) { $Out = (New-TemporaryFile).FullName }
-  $Installer = $Out
+  if ($Out) {
+    $outParent = Split-Path -Parent $Out
+    if ($outParent -and -not (Test-Path -LiteralPath $outParent -PathType Container)) { Fail "cannot write beside $Out" 16 }
+    $Installer = "$Out.partial." + [guid]::NewGuid().ToString('N').Substring(0, 8)
+  } else {
+    $Installer = (New-TemporaryFile).FullName
+  }
+  $script:Partial = $Installer
   Write-Host "auspex mdm-gate: downloading $Url"
   Fetch $Url $Installer
   $fetched = $true
@@ -154,4 +206,10 @@ try {
   throw
 }
 
+if ($Url -and $Out) {
+  try { Move-Item -LiteralPath $Installer -Destination $Out -Force }
+  catch { Fail "cannot replace $Out : $($_.Exception.Message)" 16 }
+  $Installer = (Get-Item -LiteralPath $Out).FullName # absolute, for MDM logs
+}
+$script:Partial = $null
 Write-Host "auspex mdm-gate: VERIFIED - safe to install: $Installer"
